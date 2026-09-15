@@ -18,8 +18,10 @@ using Xunit;
 namespace Nocturne.API.Tests.Controllers.V4.DevOnly;
 
 /// <summary>
-/// Creation stamps are server-assigned, so a snapshot restore cannot carry an original one in —
-/// neither through the insert branch nor by rewriting the row a matching tenant already has.
+/// Neither restore branch adopts the snapshot's creation stamp: the insert does not carry one,
+/// and the branch that updates a tenant the instance already has leaves the column alone.
+/// That an unset stamp is then server-assigned is NocturneDbContext's own contract, pinned by
+/// UpdateTimestampsTests in the Infrastructure.Data suite; nothing here re-states it.
 /// </summary>
 public class DevAdminSnapshotCreationStampTests : IDisposable
 {
@@ -28,7 +30,7 @@ public class DevAdminSnapshotCreationStampTests : IDisposable
     private readonly SqliteTestDatabase _database = TestDbContextFactory.CreateSqlite();
 
     [Fact]
-    public async Task ImportSnapshot_LeavesTheServerAssignedCreationStampAlone()
+    public async Task ImportSnapshot_DoesNotAdoptTheSnapshotsCreationStamp()
     {
         var existingId = Guid.CreateVersion7();
         var restoredId = Guid.CreateVersion7();
@@ -76,7 +78,7 @@ public class DevAdminSnapshotCreationStampTests : IDisposable
 
         var restored = await verify.Tenants.SingleAsync(t => t.Id == restoredId);
         restored.SysCreatedAt.Should().BeOnOrAfter(before,
-            "a restored tenant is stamped with the restore time, not the snapshot's");
+            "the insert carries no creation stamp from the snapshot, so the row gets a current one");
     }
 
     private DevAdminController NewController(NocturneDbContext context) =>
