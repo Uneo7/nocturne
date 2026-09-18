@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "seed": 1610,
+  "intensity": 0.7,
+  "detail": "large",
+  "durationMs": 600,
+  "stripFrames": 10,
+  "artworks": [
+    { "id": "crescent-moon", "palette": "moonlight", "surfaces": ["light", "dark"], "stripWidth": 160, "stripHeight": 160 },
+    { "id": "alarm-bell", "palette": "moonlight", "surfaces": ["light", "dark"], "stripWidth": 160, "stripHeight": 160 },
+    { "id": "linked-rings", "palette": "dusk", "surfaces": ["light", "dark"], "stripWidth": 160, "stripHeight": 160 },
+    { "id": "report-pages", "palette": "slate", "surfaces": ["light", "dark"], "stripWidth": 160, "stripHeight": 160 },
+    { "id": "magnifying-glass", "palette": "water", "surfaces": ["light", "dark"], "stripWidth": 160, "stripHeight": 160 },
+    { "id": "confirmation-mark", "palette": "moss", "surfaces": ["light", "dark"], "stripWidth": 160, "stripHeight": 160 },
+    { "id": "avatar-wash", "palette": "water", "surfaces": ["light", "dark"], "stripWidth": 160, "stripHeight": 160 },
+    { "id": "tab-underline", "palette": "ember", "surfaces": ["light", "dark"], "stripWidth": 192, "stripHeight": 24 },
+    { "id": "selection-edge", "palette": "water", "surfaces": ["light", "dark"], "stripWidth": 32, "stripHeight": 192 },
+    { "id": "confirmation-background", "palette": "moss", "surfaces": ["light", "dark"], "stripWidth": 192, "stripHeight": 64 },
+    { "id": "header-motif", "palette": "moonlight", "surfaces": ["light", "dark"], "stripWidth": 192, "stripHeight": 38 },
+    { "id": "moonlit-shoreline", "palette": "moonlight", "surfaces": ["light", "dark"], "stripWidth": 192, "stripHeight": 192 },
+    { "id": "distant-mountains", "palette": "slate", "surfaces": ["light", "dark"], "stripWidth": 256, "stripHeight": 144 },
+    { "id": "connected-shores", "palette": "water", "surfaces": ["light", "dark"], "stripWidth": 256, "stripHeight": 128 },
+    { "id": "overlapping-shapes", "palette": "dusk", "surfaces": ["light", "dark"], "stripWidth": 256, "stripHeight": 128 }
+  ]
+}

@@ -78,6 +78,7 @@
   import { contextResource } from "$lib/hooks/resource-context.svelte";
   import { remoteErrorMessage } from "$lib/api/remote-error";
   import { coachmark } from "@nocturne/coach";
+  import { Artwork } from "@nocturne/watercolour";
   import { fly, fade, scale } from "svelte/transition";
   import { cubicOut, elasticOut } from "svelte/easing";
 
@@ -225,6 +226,13 @@
           <p class="mt-3 text-lg text-muted-foreground">
             {formatNumber(entries.length)} readings analyzed
           </p>
+          <Artwork
+            artwork="header-motif"
+            palette="moonlight"
+            motion="auto"
+            autoplay="once"
+            class="mx-auto mt-4 hidden h-8 w-40 md:block"
+          />
         </div>
 
         {#if analysis}

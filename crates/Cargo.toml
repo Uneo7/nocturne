@@ -1,3 +1,26 @@
 [workspace]
 resolver = "3"
-members = ["nocturne-alerts-core", "nocturne-alerts-ffi"]
+members = [
+    "nocturne-alerts-core",
+    "nocturne-alerts-ffi",
+    "nocturne-watercolour-core",
+    "nocturne-watercolour-infra",
+    "nocturne-watercolour-wasm",
+]
+
+# The watercolour CPU reference runs hundreds of ticks per test; unoptimised
+# it is an order of magnitude slower than the suite is worth waiting for.
+[profile.dev.package.nocturne-watercolour-core]
+opt-level = 2
+
+[profile.dev.package.nocturne-watercolour-infra]
+opt-level = 2
+
+# The browser build (`--profile wasm-release`): size over compile time.
+# `panic = "abort"` would drop the panic hook's messages, which are the only
+# diagnostics a user can paste, so panics stay unwinding.
+[profile.wasm-release]
+inherits = "release"
+opt-level = "s"
+lto = true
+codegen-units = 1

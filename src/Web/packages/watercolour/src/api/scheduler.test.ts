@@ -1,0 +1,195 @@
+import { describe, expect, it } from 'vitest';
+import { MAX_FRAME_SECONDS, Scheduler, type SchedulerEnv } from './scheduler';
+
+type Listener = () => void;
+
+function fakeEnv() {
+  let nextHandle = 1;
+  const pending = new Map<number, (time: number) => void>();
+  let clock = 0;
+  let visibilityState = 'visible';
+  const listeners = new Set<Listener>();
+  const env: SchedulerEnv = {
+    requestAnimationFrame: (cb) => {
+      const handle = nextHandle++;
+      pending.set(handle, cb);
+      return handle;
+    },
+    cancelAnimationFrame: (handle) => {
+      pending.delete(handle);
+    },
+    now: () => clock,
+    document: {
+      get visibilityState() {
+        return visibilityState;
+      },
+      addEventListener: (_type, listener) => {
+        listeners.add(listener);
+      },
+      removeEventListener: (_type, listener) => {
+        listeners.delete(listener);
+      },
+    },
+  };
+  return {
+    env,
+    /** Runs every queued frame callback once at `clock + advanceMs`. */
+    frame(advanceMs = 16) {
+      clock += advanceMs;
+      const callbacks = Array.from(pending.values());
+      pending.clear();
+      for (const cb of callbacks) cb(clock);
+    },
+    get queued() {
+      return pending.size;
+    },
+    setVisibility(state: 'visible' | 'hidden') {
+      visibilityState = state;
+      for (const l of Array.from(listeners)) l();
+    },
+  };
+}
+
+function target() {
+  const ticks: number[] = [];
+  let renders = 0;
+  return {
+    ticks,
+    get renders() {
+      return renders;
+    },
+    target: {
+      tick: (dt: number) => {
+        ticks.push(dt);
+      },
+      render: () => {
+        renders += 1;
+      },
+    },
+  };
+}
+
+describe('Scheduler', () => {
+  it('does not run until an instance is active, and stops when none is', () => {
+    const fake = fakeEnv();
+    const scheduler = new Scheduler(fake.env);
+    const t = target();
+    const handle = scheduler.register(t.target);
+    expect(scheduler.running).toBe(false);
+    expect(fake.queued).toBe(0);
+
+    handle.setActive(true);
+    expect(scheduler.running).toBe(true);
+    fake.frame();
+    fake.frame();
+    expect(t.ticks).toEqual([0, 0.016]);
+    expect(t.renders).toBe(2);
+
+    handle.setActive(false);
+    fake.frame();
+    expect(scheduler.running).toBe(false);
+    expect(fake.queued).toBe(0);
+    expect(t.renders).toBe(2);
+  });
+
+  it('pauses while hidden and resumes without counting hidden time', () => {
+    const fake = fakeEnv();
+    const scheduler = new Scheduler(fake.env);
+    const t = target();
+    scheduler.register(t.target).setActive(true);
+    fake.frame();
+    fake.frame();
+    expect(t.ticks).toHaveLength(2);
+
+    fake.setVisibility('hidden');
+    expect(scheduler.running).toBe(false);
+    fake.frame(5000);
+    expect(t.ticks).toHaveLength(2);
+
+    fake.setVisibility('visible');
+    expect(scheduler.running).toBe(true);
+    fake.frame(16);
+    fake.frame(16);
+    expect(t.ticks).toHaveLength(4);
+    expect(t.ticks[2]).toBe(0);
+    expect(t.ticks[3]).toBeCloseTo(0.016);
+  });
+
+  it('clamps a long stall to MAX_FRAME_SECONDS', () => {
+    const fake = fakeEnv();
+    const scheduler = new Scheduler(fake.env);
+    const t = target();
+    scheduler.register(t.target).setActive(true);
+    fake.frame();
+    fake.frame(2000);
+    expect(t.ticks[1]).toBe(MAX_FRAME_SECONDS);
+  });
+
+  it('shares one loop between instances and drops disposed ones', () => {
+    const fake = fakeEnv();
+    const scheduler = new Scheduler(fake.env);
+    const a = target();
+    const b = target();
+    const ha = scheduler.register(a.target);
+    const hb = scheduler.register(b.target);
+    ha.setActive(true);
+    hb.setActive(true);
+    fake.frame();
+    expect(fake.queued).toBe(1);
+    expect(a.renders).toBe(1);
+    expect(b.renders).toBe(1);
+    hb.dispose();
+    fake.frame();
+    expect(a.renders).toBe(2);
+    expect(b.renders).toBe(1);
+    expect(scheduler.stats().frames).toBe(2);
+  });
+
+  it('keeps a single loop when an instance re-activates itself from inside its tick', () => {
+    const fake = fakeEnv();
+    const scheduler = new Scheduler(fake.env);
+    let renders = 0;
+    const handle = scheduler.register({
+      tick: () => handle.setActive(true),
+      render: () => {
+        renders += 1;
+      },
+    });
+    handle.setActive(true);
+    for (let i = 0; i < 10; i++) {
+      fake.frame();
+      expect(fake.queued).toBe(1);
+    }
+    expect(renders).toBe(10);
+  });
+
+  it('gates a registered element on intersection', () => {
+    const fake = fakeEnv();
+    let callback: ((records: { isIntersecting: boolean }[]) => void) | undefined;
+    class FakeObserver {
+      constructor(cb: (records: { isIntersecting: boolean }[]) => void) {
+        callback = cb;
+      }
+      observe() {}
+      disconnect() {}
+    }
+    const scheduler = new Scheduler({ ...fake.env, IntersectionObserver: FakeObserver as unknown as typeof IntersectionObserver });
+    const t = target();
+    const visibility: boolean[] = [];
+    const handle = scheduler.register({
+      ...t.target,
+      element: {} as Element,
+      onVisibilityChange: (v) => visibility.push(v),
+    });
+    handle.setActive(true);
+    callback?.([{ isIntersecting: false }]);
+    fake.frame();
+    expect(t.renders).toBe(0);
+    expect(scheduler.running).toBe(false);
+    callback?.([{ isIntersecting: true }]);
+    expect(scheduler.running).toBe(true);
+    fake.frame();
+    expect(t.renders).toBe(1);
+    expect(visibility).toEqual([false, true]);
+  });
+});
