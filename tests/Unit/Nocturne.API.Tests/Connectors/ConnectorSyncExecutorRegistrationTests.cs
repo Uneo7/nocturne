@@ -24,7 +24,7 @@ public partial class ConnectorSyncExecutorRegistrationTests
     /// </summary>
     private static readonly string[] Expected =
     [
-        "carelink", "dexcom", "eversense", "glooko", "gluroo", "librelinkup", "myfitnesspal",
+        "carelink", "dexcom", "eversense", "glooko", "glookoxt", "gluroo", "librelinkup", "myfitnesspal",
         "mylife", "nightscout", "nocturneremote", "tandem", "tidepool", "twiist",
     ];
 

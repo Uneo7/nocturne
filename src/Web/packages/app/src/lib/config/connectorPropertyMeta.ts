@@ -274,6 +274,13 @@ export const connectorPropertyMeta = {
     description: 'Skip basal entries that resolve to a near-zero rate',
     category: 'Advanced',
   },
+
+  // Glooko XT-specific
+  GlucoseUnit: {
+    label: 'Glucose Unit',
+    description: 'The unit your Glooko XT account displays glucose in; Auto works it out from the readings',
+    category: 'General',
+  },
   // OAuth and Webhooks
   AccessToken: {
     label: 'Access Token',

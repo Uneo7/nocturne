@@ -31,6 +31,7 @@ export const logoExtensions: Record<string, string> = {
   eversense: "png",
   github: "png",
   glooko: "png",
+  glookoxt: "png",
   glucotracker: "png",
   gluroo: "png",
   "google-chat": "png",

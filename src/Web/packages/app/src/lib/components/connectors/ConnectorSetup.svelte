@@ -38,6 +38,7 @@
   import { Label } from "$lib/components/ui/label";
   import ConnectorConfigForm from "$lib/components/settings/ConnectorConfigForm.svelte";
   import CareLinkConnectPanel from "$lib/components/connectors/CareLinkConnectPanel.svelte";
+  import GlookoXtConnectPanel from "$lib/components/connectors/GlookoXtConnectPanel.svelte";
   import SettingsPageSkeleton from "$lib/components/settings/SettingsPageSkeleton.svelte";
 
   import { AlertCircle, ExternalLink } from "lucide-svelte";
@@ -155,6 +156,14 @@
     if (info.country && !configuration.countryCode) {
       configuration = { ...configuration, countryCode: info.country.toLowerCase() };
     }
+  }
+
+  // Glooko XT signs in with an emailed one-time code, so the token comes from its own panel.
+  const isGlookoXt = $derived(connectorInfo?.id?.toLowerCase() === "glookoxt");
+
+  function onGlookoXtConnected(info: { email: string }) {
+    // The server already recorded the email; mirror it so a save from the form keeps it.
+    configuration = { ...configuration, email: info.email };
   }
 
   // --- UI state ---
@@ -414,6 +423,14 @@
       <!-- CareLink browser-based sign-in -->
       {#if isCareLink}
         <CareLinkConnectPanel onConnected={onCareLinkConnected} />
+      {/if}
+
+      <!-- Glooko XT emailed-code sign-in -->
+      {#if isGlookoXt}
+        <GlookoXtConnectPanel
+          initialEmail={typeof configuration.email === "string" ? configuration.email : ""}
+          onConnected={onGlookoXtConnected}
+        />
       {/if}
 
       <!-- Configuration Form -->

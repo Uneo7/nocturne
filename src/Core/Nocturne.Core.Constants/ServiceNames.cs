@@ -132,6 +132,12 @@ public static class ServiceNames
     public const string TConnectSyncConnector = "tconnectsync-connector";
 
     /// <summary>
+    /// Aspire resource name for the Glooko XT (formerly Diabnext) connector service.
+    /// </summary>
+    /// <seealso cref="DataSources.GlookoXtConnector"/>
+    public const string GlookoXtConnector = "glookoxt-connector";
+
+    /// <summary>
     /// Aspire parameter names resolved by the AppHost via <c>AddParameter</c> and
     /// by services reading <c>Parameters:&lt;name&gt;</c> from configuration.
     /// </summary>
