@@ -8,24 +8,18 @@
     complete as completeGlookoXtConnect,
   } from "$lib/api/generated/glookoXtConnects.generated.remote";
   import { describeSubmitError } from "$lib/forms/submit-error";
-  import {
-    Card,
-    CardContent,
-    CardHeader,
-    CardTitle,
-    CardDescription,
-  } from "$lib/components/ui/card";
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
   import { Label } from "$lib/components/ui/label";
-  import { CheckCircle2, KeyRound, MailCheck } from "lucide-svelte";
+  import { CheckCircle2, MailCheck } from "lucide-svelte";
 
   let {
-    initialEmail = "",
+    email = $bindable(""),
     onConnected,
   }: {
-    // The email already on the connector configuration, if any, so a reconnect starts filled in.
-    initialEmail?: string;
+    // The connector's own email field, rendered by the surrounding credentials card; the sign-in
+    // reads it from there rather than asking a second time.
+    email?: string;
     // Called once the token is stored, with the account that signed in.
     onConnected?: (info: { email: string; server?: string | null; tokenExpiresAt?: Date | string | null }) => void;
   } = $props();
@@ -33,7 +27,6 @@
   type Phase = "idle" | "awaiting-code" | "done";
 
   let phase = $state<Phase>("idle");
-  let email = $state(initialEmail);
   let password = $state("");
   let code = $state("");
   let busy = $state(false);
@@ -41,6 +34,7 @@
   let tokenExpiresAt = $state<Date | string | null>(null);
 
   const canRequest = $derived(email.trim().length > 0 && password.length > 0 && !busy);
+  const emailMissing = $derived(email.trim().length === 0);
   const canComplete = $derived(code.trim().length > 0 && !busy);
 
   async function sendCode() {
@@ -96,104 +90,93 @@
   }
 </script>
 
-<Card>
-  <CardHeader>
-    <CardTitle class="flex items-center gap-2">
-      <KeyRound class="h-4 w-4" />
-      Connect your Glooko XT account
-    </CardTitle>
-    <CardDescription>
-      Glooko XT signs you in with a code sent to your email. Your password is only used to request
-      that code and is never stored — Nocturne keeps a revocable access token instead.
-    </CardDescription>
-  </CardHeader>
-  <CardContent class="space-y-4">
-    {#if error}
-      <p class="text-sm text-destructive">{error}</p>
-    {/if}
+<div class="space-y-4" data-testid="glookoxt-connect">
+  <p class="text-sm text-muted-foreground">
+    Glooko XT signs you in with a code sent to your email. Your password is only used to request
+    that code and is never stored: Nocturne keeps a revocable access token instead.
+  </p>
 
-    {#if phase === "idle"}
-      <form
-        class="space-y-3"
-        onsubmit={(e) => {
-          e.preventDefault();
-          void sendCode();
-        }}
-      >
-        <div class="space-y-2">
-          <Label for="glookoxt-email">Glooko XT email</Label>
-          <Input
-            id="glookoxt-email"
-            type="email"
-            autocomplete="username"
-            bind:value={email}
-            disabled={busy}
-            placeholder="you@example.com"
-          />
-        </div>
-        <div class="space-y-2">
-          <Label for="glookoxt-password">Password</Label>
-          <Input
-            id="glookoxt-password"
-            type="password"
-            autocomplete="current-password"
-            bind:value={password}
-            disabled={busy}
-          />
-        </div>
-        <Button type="submit" disabled={!canRequest}>
-          <MailCheck class="h-4 w-4 mr-2" />
-          {busy ? "Sending code…" : "Send me a code"}
-        </Button>
-      </form>
-    {/if}
+  {#if error}
+    <p class="text-sm text-destructive">{error}</p>
+  {/if}
 
-    {#if phase === "awaiting-code"}
-      <p class="text-sm text-muted-foreground">
-        Glooko XT has emailed a code to <span class="font-medium text-foreground">{email}</span>.
-        Enter it below. Codes expire after a few minutes.
-      </p>
-      <form
-        class="space-y-3"
-        onsubmit={(e) => {
-          e.preventDefault();
-          void finishConnect();
-        }}
-      >
-        <div class="space-y-2">
-          <Label for="glookoxt-code">Code from the email</Label>
-          <Input
-            id="glookoxt-code"
-            inputmode="numeric"
-            autocomplete="one-time-code"
-            bind:value={code}
-            disabled={busy}
-            class="font-mono tracking-widest"
-            placeholder="1234"
-          />
-        </div>
-        <div class="flex gap-2">
-          <Button type="submit" disabled={!canComplete}>
-            {busy ? "Finishing…" : "Finish connecting"}
-          </Button>
-          <Button type="button" variant="ghost" onclick={reset} disabled={busy}>Start over</Button>
-        </div>
-      </form>
-    {/if}
-
-    {#if phase === "done"}
-      <div class="flex items-start gap-2 text-sm">
-        <CheckCircle2 class="h-5 w-5 text-green-600 shrink-0" />
-        <div>
-          <p class="font-medium">Glooko XT connected.</p>
-          <p class="text-muted-foreground">
-            Signed in as {email}. Syncing will use the stored token automatically{tokenExpiresAt
-              ? ` until ${formatExpiry(tokenExpiresAt)}`
-              : ""}.
-          </p>
-        </div>
+  {#if phase === "idle"}
+    <form
+      class="space-y-4"
+      onsubmit={(e) => {
+        e.preventDefault();
+        void sendCode();
+      }}
+    >
+      <div class="space-y-2">
+        <Label for="glookoxt-password">Password</Label>
+        <Input
+          id="glookoxt-password"
+          type="password"
+          autocomplete="current-password"
+          bind:value={password}
+          disabled={busy}
+        />
+        <p class="text-sm text-muted-foreground">
+          {#if emailMissing}
+            Fill in the email above first.
+          {:else}
+            Used once to request the code for <span class="font-medium text-foreground">{email}</span>.
+          {/if}
+        </p>
       </div>
-      <Button variant="outline" size="sm" onclick={reset}>Reconnect</Button>
-    {/if}
-  </CardContent>
-</Card>
+      <Button type="submit" variant="outline" disabled={!canRequest}>
+        <MailCheck class="h-4 w-4 mr-2" />
+        {busy ? "Sending code…" : "Send me a code"}
+      </Button>
+    </form>
+  {/if}
+
+  {#if phase === "awaiting-code"}
+    <form
+      class="space-y-4"
+      onsubmit={(e) => {
+        e.preventDefault();
+        void finishConnect();
+      }}
+    >
+      <div class="space-y-2">
+        <Label for="glookoxt-code">Code from the email</Label>
+        <Input
+          id="glookoxt-code"
+          inputmode="numeric"
+          autocomplete="one-time-code"
+          bind:value={code}
+          disabled={busy}
+          class="font-mono tracking-widest"
+          placeholder="1234"
+        />
+        <p class="text-sm text-muted-foreground">
+          Glooko XT has emailed a code to <span class="font-medium text-foreground">{email}</span>.
+          Codes expire after a few minutes.
+        </p>
+      </div>
+      <div class="flex gap-2">
+        <Button type="submit" disabled={!canComplete}>
+          {busy ? "Finishing…" : "Finish connecting"}
+        </Button>
+        <Button type="button" variant="ghost" onclick={reset} disabled={busy}>Start over</Button>
+      </div>
+    </form>
+  {/if}
+
+  {#if phase === "done"}
+    <div class="flex items-start gap-2 text-sm">
+      <CheckCircle2 class="h-5 w-5 text-green-600 shrink-0" />
+      <div>
+        <p class="font-medium">Glooko XT connected.</p>
+        <p class="text-muted-foreground">
+          Signed in as {email}. Syncing will use the stored token automatically{tokenExpiresAt
+            ? ` until ${formatExpiry(tokenExpiresAt)}`
+            : ""}.
+        </p>
+      </div>
+    </div>
+    <Button variant="outline" size="sm" onclick={reset}>Reconnect</Button>
+  {/if}
+</div>

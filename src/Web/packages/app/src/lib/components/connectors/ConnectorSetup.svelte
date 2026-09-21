@@ -334,6 +334,18 @@
 </script>
 
 <!-- SELECTION STEP -->
+<!-- Glooko XT emailed-code sign-in (Glooko connector, Server = XT), rendered inside the
+     credentials card so the token flow sits with the connector's other credentials. -->
+{#snippet glookoXtCredentials()}
+  <GlookoXtConnectPanel
+    bind:email={
+      () => (typeof configuration.email === "string" ? configuration.email : ""),
+      (v) => (configuration = { ...configuration, email: v })
+    }
+    onConnected={onGlookoXtConnected}
+  />
+{/snippet}
+
 {#if step === "selection"}
   <ConnectorSelectionGrid
     {servicesOverview}
@@ -430,14 +442,6 @@
         <CareLinkConnectPanel onConnected={onCareLinkConnected} />
       {/if}
 
-      <!-- Glooko XT emailed-code sign-in (Glooko connector, Server = XT) -->
-      {#if isGlookoXt}
-        <GlookoXtConnectPanel
-          initialEmail={typeof configuration.email === "string" ? configuration.email : ""}
-          onConnected={onGlookoXtConnected}
-        />
-      {/if}
-
       <!-- Configuration Form -->
       {#if hasRuntimeConfig}
         <ConnectorConfigForm
@@ -447,6 +451,7 @@
           {effectiveConfig}
           {hasSecrets}
           {showEnvVarHints}
+          credentials={isGlookoXt ? glookoXtCredentials : undefined}
           onSave={handleSave}
         />
       {:else}
