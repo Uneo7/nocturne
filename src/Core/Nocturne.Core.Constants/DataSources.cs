@@ -122,11 +122,6 @@ public static class DataSources
     /// </summary>
     public const string TwiistConnector = "twiist-connector";
 
-    /// <summary>
-    /// Data read from a Glooko XT (formerly Diabnext) patient account via the Glooko XT connector.
-    /// </summary>
-    public const string GlookoXtConnector = "glookoxt-connector";
-
     // ============================================================================
     // Manual Entry Sources
     // ============================================================================

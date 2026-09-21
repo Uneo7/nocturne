@@ -27,7 +27,7 @@
     // The email already on the connector configuration, if any, so a reconnect starts filled in.
     initialEmail?: string;
     // Called once the token is stored, with the account that signed in.
-    onConnected?: (info: { email: string; tokenExpiresAt?: Date | string | null }) => void;
+    onConnected?: (info: { email: string; server?: string | null; tokenExpiresAt?: Date | string | null }) => void;
   } = $props();
 
   type Phase = "idle" | "awaiting-code" | "done";
@@ -75,7 +75,7 @@
       }
       tokenExpiresAt = res.tokenExpiresAt ?? null;
       phase = "done";
-      onConnected?.({ email: res.email ?? email.trim(), tokenExpiresAt });
+      onConnected?.({ email: res.email ?? email.trim(), server: res.server ?? "XT", tokenExpiresAt });
     } catch (e) {
       error = describeSubmitError(e, "Could not complete the Glooko XT sign-in.");
     } finally {

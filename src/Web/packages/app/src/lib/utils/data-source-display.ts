@@ -9,7 +9,6 @@ const DATA_SOURCE_DISPLAY_NAMES: Record<string, string> = {
   "libre-connector": "FreeStyle Libre",
   "minimed-connector": "Medtronic",
   "glooko-connector": "Glooko",
-  "glookoxt-connector": "Glooko XT",
   "nightscout-connector": "Nightscout",
   "tidepool-connector": "Tidepool",
   "tconnectsync-connector": "t:connect",

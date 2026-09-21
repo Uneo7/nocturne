@@ -17,7 +17,7 @@ public class PatternConnectorInstallerTests
 {
     private static readonly string[] Pattern =
     [
-        "CareLink", "Dexcom", "Eversense", "Glooko", "GlookoXt", "LibreLinkUp", "MyFitnessPal", "Tandem",
+        "CareLink", "Dexcom", "Eversense", "Glooko", "LibreLinkUp", "MyFitnessPal", "Tandem",
         "Tidepool", "Twiist",
     ];
 

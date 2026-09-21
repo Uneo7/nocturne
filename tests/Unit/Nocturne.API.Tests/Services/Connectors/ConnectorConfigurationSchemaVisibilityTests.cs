@@ -23,9 +23,9 @@ public class ConnectorConfigurationSchemaVisibilityTests
             VisibleWhen = ConnectorPropertyKey.Server, VisibleWhenValues = ["EU"])]
         public string? Password { get; init; }
 
-        [ConnectorProperty(ConnectorPropertyKey.GlucoseUnit, DefaultValue = "Auto",
+        [ConnectorProperty(ConnectorPropertyKey.Region, DefaultValue = "Auto",
             VisibleWhen = ConnectorPropertyKey.Server, VisibleWhenValues = ["XT"])]
-        public string GlucoseUnit { get; init; } = "Auto";
+        public string Region { get; init; } = "Auto";
     }
 
     [Fact]
@@ -38,7 +38,7 @@ public class ConnectorConfigurationSchemaVisibilityTests
         password.GetProperty("property").GetString().Should().Be("server");
         password.GetProperty("values").EnumerateArray().Select(v => v.GetString()).Should().Equal("EU");
 
-        var unit = properties.GetProperty("glucoseUnit").GetProperty("x-visibleWhen");
+        var unit = properties.GetProperty("region").GetProperty("x-visibleWhen");
         unit.GetProperty("property").GetString().Should().Be("server");
         unit.GetProperty("values").EnumerateArray().Select(v => v.GetString()).Should().Equal("XT");
 

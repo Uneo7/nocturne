@@ -92,7 +92,4 @@ public enum ConnectorPropertyKey
     PumpSerialNumber,
     FetchAllEventTypes,
     IgnoreZeroUnitBasal,
-
-    // Glooko XT-specific
-    GlucoseUnit,
 }

@@ -5,7 +5,8 @@ using Microsoft.AspNetCore.Mvc;
 using Nocturne.API.Attributes;
 using Nocturne.API.Authorization;
 using Nocturne.API.Services.Connectors;
-using Nocturne.Connectors.GlookoXt.Services;
+using Nocturne.Connectors.Glooko.Configurations;
+using Nocturne.Connectors.Glooko.Xt;
 using Nocturne.Core.Contracts.Connectors;
 using Nocturne.Core.Contracts.Multitenancy;
 using Nocturne.Core.Models.Authorization;
@@ -14,13 +15,14 @@ using OpenApi.Remote.Attributes;
 namespace Nocturne.API.Controllers.V4.Connectors;
 
 /// <summary>
-/// Drives the Glooko XT sign-in, which no background job can complete on its own: the password
+/// Drives the Glooko XT sign-in — the Glooko connector with <c>Server = XT</c> — which no
+/// background job can complete on its own: the password
 /// step makes Glooko XT email the patient a one-time code, and only that code yields the JWT the
 /// connector runs on. The tenant types the code here, the server trades it for the token and
 /// stores the token as the connector secret. The password is used once and never stored.
 /// </summary>
 [ApiController]
-[Route("api/v4/connectors/glookoxt/connect")]
+[Route("api/v4/connectors/glooko/connect/xt")]
 [Authorize]
 [RequireScope(Scope.TenantSettings)]
 // Completing the flow writes a year-long token for a real patient account into the shared demo
@@ -33,7 +35,7 @@ public class GlookoXtConnectController(
     IConnectorAttentionNotifier attentionNotifier,
     ILogger<GlookoXtConnectController> logger) : ControllerBase
 {
-    private const string ConnectorName = "GlookoXt";
+    private const string ConnectorName = "Glooko";
 
     /// <summary>
     /// Step one: checks the email and password with Glooko XT, which then emails the account a
@@ -96,12 +98,12 @@ public class GlookoXtConnectController(
 
         // A fresh token answers whatever the failing syncs asked of the owner.
         if (tenantAccessor.Context?.TenantId is { } tenantId)
-            await attentionNotifier.ApplyAsync(tenantId, "glookoxt", "Glooko XT", null, ct);
+            await attentionNotifier.ApplyAsync(tenantId, "glooko", "Glooko", null, ct);
 
         var expiresAt = GlookoXtJwt.TryGetExpiry(step.Token);
         logger.LogInformation("Glooko XT connect completed for tenant {Tenant}", tenantAccessor.Context?.TenantId);
 
-        return Ok(new GlookoXtConnectCompleteResponse { Success = true, Email = email, TokenExpiresAt = expiresAt });
+        return Ok(new GlookoXtConnectCompleteResponse { Success = true, Email = email, Server = GlookoConstants.RegionXT, TokenExpiresAt = expiresAt });
     }
 
     /// <summary>
@@ -111,10 +113,11 @@ public class GlookoXtConnectController(
     private GlookoXtLoginClient? LoginClient() => services.GetService<GlookoXtLoginClient>();
 
     /// <summary>
-    /// Writes the signed-in email into the connector configuration. It is the connector's one
-    /// required setting, so without it the token sits unused and the connector never syncs. Merged
-    /// into the stored document because the save replaces the whole thing. Never fails the connect:
-    /// the token is already stored and the form can be filled in by hand.
+    /// Writes the signed-in email and the XT region into the connector configuration: the email is
+    /// the connector's one required setting, and the region is what routes the sync to Glooko XT
+    /// at all — the tokens just stored belong to it. Merged into the stored document because the
+    /// save replaces the whole thing. Never fails the connect: the token is already stored and the
+    /// form can be filled in by hand.
     /// </summary>
     private async Task PersistEmailAsync(string email, CancellationToken ct)
     {
@@ -141,6 +144,7 @@ public class GlookoXtConnectController(
             : new JsonObject();
 
         config["email"] = email;
+        config["server"] = GlookoConstants.RegionXT;
         return JsonDocument.Parse(config.ToJsonString());
     }
 }
@@ -168,6 +172,8 @@ public class GlookoXtConnectCompleteResponse
 {
     public bool Success { get; set; }
     public string? Email { get; set; }
+    /// <summary>The Glooko region the stored token belongs to: always <c>XT</c>.</summary>
+    public string? Server { get; set; }
     /// <summary>When the stored token lapses and the sign-in has to be repeated, if the token says.</summary>
     public DateTime? TokenExpiresAt { get; set; }
 }

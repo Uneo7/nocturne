@@ -23,7 +23,7 @@ public class ConnectorPollingRegistrationTests
 {
     private static readonly string[] Polling =
     [
-        "CareLink", "Dexcom", "Eversense", "Glooko", "GlookoXt", "Gluroo", "LibreLinkUp", "MyFitnessPal",
+        "CareLink", "Dexcom", "Eversense", "Glooko", "Gluroo", "LibreLinkUp", "MyFitnessPal",
         "MyLife", "Nightscout", "NocturneRemote", "Tandem", "Tidepool", "Twiist",
     ];
 

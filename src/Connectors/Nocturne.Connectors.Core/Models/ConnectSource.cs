@@ -22,5 +22,4 @@ public enum ConnectSource
     Twiist,
     CareLink,
     Tandem,
-    GlookoXt,
 }

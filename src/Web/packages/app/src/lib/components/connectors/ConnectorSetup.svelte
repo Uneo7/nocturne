@@ -158,12 +158,17 @@
     }
   }
 
-  // Glooko XT signs in with an emailed one-time code, so the token comes from its own panel.
-  const isGlookoXt = $derived(connectorInfo?.id?.toLowerCase() === "glookoxt");
+  // Glooko XT is the Glooko connector pointed at the XT region: it signs in with an emailed
+  // one-time code, so the token comes from its own panel instead of a stored password.
+  const isGlookoXt = $derived(
+    connectorInfo?.id?.toLowerCase() === "glooko" &&
+      String(configuration.server ?? effectiveConfig?.server ?? "").toUpperCase() === "XT"
+  );
 
-  function onGlookoXtConnected(info: { email: string }) {
-    // The server already recorded the email; mirror it so a save from the form keeps it.
-    configuration = { ...configuration, email: info.email };
+  function onGlookoXtConnected(info: { email: string; server?: string | null }) {
+    // The server already recorded the email and the region; mirror both so a save from the form
+    // keeps them.
+    configuration = { ...configuration, email: info.email, server: info.server ?? "XT" };
   }
 
   // --- UI state ---
@@ -425,7 +430,7 @@
         <CareLinkConnectPanel onConnected={onCareLinkConnected} />
       {/if}
 
-      <!-- Glooko XT emailed-code sign-in -->
+      <!-- Glooko XT emailed-code sign-in (Glooko connector, Server = XT) -->
       {#if isGlookoXt}
         <GlookoXtConnectPanel
           initialEmail={typeof configuration.email === "string" ? configuration.email : ""}
