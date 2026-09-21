@@ -31,7 +31,6 @@ namespace Nocturne.Connectors.Glooko.Configurations;
         SyncDataType.Food,
         SyncDataType.TempBasals,
         SyncDataType.StateSpans,
-        SyncDataType.TempBasals,
         SyncDataType.DeviceEvents,
         SyncDataType.Profiles,
         SyncDataType.Notes,
