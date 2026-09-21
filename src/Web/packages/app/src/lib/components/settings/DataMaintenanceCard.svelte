@@ -143,7 +143,7 @@
           </Button>
           {#if foldResult}
             <p class="text-sm text-muted-foreground mt-2">
-              {foldResult.examined} spans examined, {foldResult.widened} widened, {foldResult.removed} merged away.
+              {foldResult.examined} spans examined, {foldResult.widened} merges, {foldResult.removed} spans absorbed.
             </p>
           {/if}
           {#if foldError}
