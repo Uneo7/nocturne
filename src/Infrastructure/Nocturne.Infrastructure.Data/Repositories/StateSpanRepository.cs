@@ -33,6 +33,30 @@ public class StateSpanRepository : IStateSpanRepository
     };
 
     /// <summary>
+    ///     Categories whose spans are device-reported states: a pump that reports its mode as a
+    ///     stream of short readings — a retry every couple of minutes, a mode confirmed again at
+    ///     each sync — describes one continuous state in many rows. Those rows fold into one span
+    ///     at write time (<see cref="TryFoldIntoNeighbourAsync"/>). Patient-entered categories
+    ///     (exercise, illness, travel) are left as entered: two workouts back to back are two.
+    ///     Overrides are not folded either: every override carries the same <c>Custom</c> state
+    ///     and differs only by name, so two adjacent ones are as likely two overrides as one.
+    /// </summary>
+    private static readonly HashSet<string> FoldableCategories = new(StringComparer.OrdinalIgnoreCase)
+    {
+        nameof(StateSpanCategory.PumpMode),
+        nameof(StateSpanCategory.PumpConnectivity),
+    };
+
+    /// <summary>
+    ///     How far apart two same-state spans may sit and still be one state. A minute absorbs the
+    ///     minute rounding of an export and the second-level jitter of a device clock; a longer
+    ///     gap is a real interruption the timeline should show.
+    /// </summary>
+    public static readonly TimeSpan FoldTolerance = TimeSpan.FromMinutes(1);
+
+    private const string FoldedSpansKey = "foldedSpans";
+
+    /// <summary>
     /// The stored <c>Category</c> values that represent v1 Activity records, as strings for
     /// translation into SQL.
     /// </summary>
@@ -216,6 +240,10 @@ public class StateSpanRepository : IStateSpanRepository
         }
         else
         {
+            var folded = await TryFoldIntoNeighbourAsync(stateSpan, cancellationToken);
+            if (folded != null)
+                return StateSpanMapper.ToDomainModel(folded);
+
             entity = StateSpanMapper.ToEntity(stateSpan);
             _context.StateSpans.Add(entity);
             isNew = true;
@@ -288,6 +316,79 @@ public class StateSpanRepository : IStateSpanRepository
         }
 
         return StateSpanMapper.ToDomainModel(entity);
+    }
+
+    /// <summary>
+    ///     Absorbs <paramref name="incoming"/> into a stored span of the same category, state and
+    ///     source that touches it — overlapping, or within <see cref="FoldTolerance"/> on either
+    ///     side — by widening that span to cover both. Returns the widened span, or null when there
+    ///     is nothing to fold into. Only connector-keyed, closed spans fold: a span without an
+    ///     <c>OriginalId</c> is a person's own entry, and an open span says nothing about when the
+    ///     state ended, so a later same-state reading supersedes it (see the caller) rather than
+    ///     claiming the state ran unbroken in between.
+    /// </summary>
+    /// <remarks>
+    ///     Folding is what makes a stream of short same-state readings one span, and what keeps a
+    ///     re-read idempotent without remembering which ids were absorbed: a folded reading, seen
+    ///     again, lies inside the span it widened and folds again to no effect. The number of
+    ///     readings that widened the span is kept in its metadata.
+    /// </remarks>
+    private async Task<StateSpanEntity?> TryFoldIntoNeighbourAsync(StateSpan incoming, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrEmpty(incoming.OriginalId) || string.IsNullOrEmpty(incoming.State)) return null;
+        if (!FoldableCategories.Contains(incoming.Category.ToString())) return null;
+
+        var category = incoming.Category.ToString();
+        var start = incoming.StartTimestamp;
+        var end = incoming.EndTimestamp;
+        var reachStart = start - FoldTolerance;
+        var reachEnd = (end ?? start) + FoldTolerance;
+
+        var neighbour = await _context.StateSpans
+            .Where(s => s.Category == category
+                        && s.State == incoming.State
+                        && s.Source == incoming.Source
+                        && s.DeletedAt == null
+                        && s.SupersededById == null
+                        && s.EndTimestamp != null
+                        && s.StartTimestamp <= reachEnd
+                        && s.EndTimestamp >= reachStart)
+            .OrderBy(s => s.StartTimestamp)
+            .FirstOrDefaultAsync(cancellationToken);
+        if (neighbour == null) return null;
+
+        var widened = false;
+        if (start < neighbour.StartTimestamp)
+        {
+            neighbour.StartTimestamp = start;
+            widened = true;
+        }
+
+        if (end == null || end > neighbour.EndTimestamp)
+        {
+            neighbour.EndTimestamp = end;
+            widened = true;
+        }
+
+        // A reading that lies inside the span already — a re-read, or a retry nested in a longer
+        // report — changes nothing and is not counted.
+        if (!widened) return neighbour;
+
+        var metadata = MapperHelpers.DeserializeJson<Dictionary<string, object>>(neighbour.MetadataJson) ?? new Dictionary<string, object>();
+        var foldedBefore = metadata.TryGetValue(FoldedSpansKey, out var raw) && raw is System.Text.Json.JsonElement je && je.TryGetInt32(out var n) ? n : 0;
+        metadata[FoldedSpansKey] = foldedBefore + 1;
+        if (metadata.ContainsKey("durationSeconds"))
+            metadata["durationSeconds"] = neighbour.EndTimestamp is { } e ? (long)(e - neighbour.StartTimestamp).TotalSeconds : 0L;
+
+        neighbour.MetadataJson = System.Text.Json.JsonSerializer.Serialize(metadata);
+        neighbour.UpdatedAt = DateTime.UtcNow;
+        await _context.SaveChangesAsync(cancellationToken);
+
+        _logger.LogDebug(
+            "Folded {Category}/{State} span {OriginalId} into {NeighbourId} ({Start:O}..{End:O})",
+            category, incoming.State, incoming.OriginalId, neighbour.Id, neighbour.StartTimestamp, neighbour.EndTimestamp);
+
+        return neighbour;
     }
 
     /// <summary>
