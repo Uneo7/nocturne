@@ -102,6 +102,37 @@ public class StateSpanRepositoryTests : IDisposable
     }
 
     [Fact]
+    public async Task FoldStoredSpansAsync_MergesStoredRunsAndSoftDeletesTheAbsorbed()
+    {
+        var t0 = new DateTime(2026, 9, 7, 0, 0, 0, DateTimeKind.Utc);
+        // Stored before folding existed: written straight to the context, not through the upsert.
+        foreach (var (id, state, start, end) in new[]
+                 {
+                     ("a", "Limited", t0, t0.AddMinutes(3)),
+                     ("b", "Limited", t0.AddMinutes(3), t0.AddMinutes(9)),
+                     ("c", "Automatic", t0.AddMinutes(9), t0.AddHours(2)),
+                     ("d", "Automatic", t0.AddHours(2), t0.AddHours(3)),
+                     ("e", "Automatic", t0.AddHours(5), t0.AddHours(6)),
+                 })
+        {
+            _context.StateSpans.Add(Nocturne.Infrastructure.Data.Mappers.StateSpanMapper.ToEntity(DeviceSpan(id, state, start, end)));
+        }
+        await _context.SaveChangesAsync();
+
+        var result = await _repository.FoldStoredSpansAsync();
+
+        result.Examined.Should().Be(5);
+        result.Widened.Should().Be(2);
+        result.Removed.Should().Be(2);
+        var stored = (await _repository.GetStateSpansAsync(category: StateSpanCategory.PumpMode, descending: false)).ToList();
+        stored.Select(s => (s.OriginalId, s.EndTimestamp)).Should().Equal(
+            ("a", t0.AddMinutes(9)), ("c", t0.AddHours(3)), ("e", t0.AddHours(6)));
+        stored[0].Metadata!["foldedSpans"].ToString().Should().Be("1");
+
+        (await _repository.FoldStoredSpansAsync()).Removed.Should().Be(0, "a second pass finds nothing left to fold");
+    }
+
+    [Fact]
     public async Task UpsertStateSpanAsync_GapBeyondTolerance_KeepsSeparateSpans()
     {
         var t0 = new DateTime(2026, 9, 7, 0, 0, 0, DateTimeKind.Utc);

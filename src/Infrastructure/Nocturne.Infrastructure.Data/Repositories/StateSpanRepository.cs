@@ -406,6 +406,72 @@ public class StateSpanRepository : IStateSpanRepository
             .OrderByDescending(s => s.DeletedAt)
             .FirstOrDefaultAsync(cancellationToken);
 
+    /// <inheritdoc />
+    public async Task<StateSpanFoldResult> FoldStoredSpansAsync(CancellationToken cancellationToken = default)
+    {
+        var result = new StateSpanFoldResult();
+        var categories = FoldableCategories.ToList();
+
+        var spans = await _context.StateSpans
+            .Where(s => categories.Contains(s.Category)
+                        && s.OriginalId != null
+                        && s.EndTimestamp != null
+                        && s.DeletedAt == null
+                        && s.SupersededById == null)
+            .OrderBy(s => s.Category).ThenBy(s => s.Source).ThenBy(s => s.State).ThenBy(s => s.StartTimestamp)
+            .ToListAsync(cancellationToken);
+        result.Examined = spans.Count;
+
+        var now = DateTime.UtcNow;
+        foreach (var run in spans.GroupBy(s => (s.Category, s.Source, s.State)))
+        {
+            StateSpanEntity? keeper = null;
+            var absorbedIntoKeeper = 0;
+
+            foreach (var span in run)
+            {
+                if (keeper != null && span.StartTimestamp <= keeper.EndTimestamp!.Value + FoldTolerance)
+                {
+                    if (span.EndTimestamp > keeper.EndTimestamp)
+                        keeper.EndTimestamp = span.EndTimestamp;
+                    span.DeletedAt = now;
+                    absorbedIntoKeeper++;
+                    result.Removed++;
+                    continue;
+                }
+
+                if (keeper != null && absorbedIntoKeeper > 0)
+                    MarkFolded(keeper, absorbedIntoKeeper, now, result);
+
+                keeper = span;
+                absorbedIntoKeeper = 0;
+            }
+
+            if (keeper != null && absorbedIntoKeeper > 0)
+                MarkFolded(keeper, absorbedIntoKeeper, now, result);
+        }
+
+        if (result.Removed > 0)
+            await _context.SaveChangesAsync(cancellationToken);
+
+        _logger.LogInformation(
+            "Folded stored state spans: {Examined} examined, {Widened} widened, {Removed} removed",
+            result.Examined, result.Widened, result.Removed);
+        return result;
+    }
+
+    private static void MarkFolded(StateSpanEntity keeper, int absorbed, DateTime now, StateSpanFoldResult result)
+    {
+        var metadata = MapperHelpers.DeserializeJson<Dictionary<string, object>>(keeper.MetadataJson) ?? new Dictionary<string, object>();
+        var before = metadata.TryGetValue(FoldedSpansKey, out var raw) && raw is System.Text.Json.JsonElement je && je.TryGetInt32(out var n) ? n : 0;
+        metadata[FoldedSpansKey] = before + absorbed;
+        if (metadata.ContainsKey("durationSeconds"))
+            metadata["durationSeconds"] = (long)(keeper.EndTimestamp!.Value - keeper.StartTimestamp).TotalSeconds;
+        keeper.MetadataJson = System.Text.Json.JsonSerializer.Serialize(metadata);
+        keeper.UpdatedAt = now;
+        result.Widened++;
+    }
+
     /// <summary>
     /// Bulk upsert state spans (for connector imports)
     /// </summary>
