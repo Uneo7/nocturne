@@ -128,6 +128,9 @@
       // Skip hidden fields - connector derives these automatically
       if (propSchema["x-hidden"] === true) continue;
 
+      // Skip fields whose governing property currently rules them out
+      if (!isVisible(propSchema)) continue;
+
       // Skip 'enabled' field - it's controlled by the "Enable Connector" toggle
       if (propName.toLowerCase() === "enabled") continue;
 
@@ -169,7 +172,7 @@
         name,
         schema: schema.properties[name],
       }))
-      .filter((s) => s.schema && s.schema["x-hidden"] !== true);
+      .filter((s) => s.schema && s.schema["x-hidden"] !== true && isVisible(s.schema));
   });
 
   // Get non-secret fields in the Credentials category
@@ -180,10 +183,22 @@
         ([name, propSchema]) =>
           getPropertyMeta(name).category === "Credentials" &&
           !secretFieldSet.has(name) &&
-          propSchema["x-hidden"] !== true
+          propSchema["x-hidden"] !== true &&
+          isVisible(propSchema)
       )
       .map(([name, schema]) => ({ name, schema }));
   });
+
+  // A property conditioned on another (x-visibleWhen) is shown only while that property, as the
+  // form currently has it, holds one of the listed values. Compared without case, as the backend does.
+  function isVisible(propSchema: JsonSchemaProperty): boolean {
+    const condition = propSchema["x-visibleWhen"];
+    if (!condition) return true;
+    const master = getPropertyValue(condition.property);
+    if (master === undefined || master === null) return false;
+    const text = String(master).toLowerCase();
+    return condition.values.some((v) => v.toLowerCase() === text);
+  }
 
   function getPropertyValue(propName: string): unknown {
     // Priority: user configuration > effective config from connector > schema default
