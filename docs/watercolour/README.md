@@ -15,9 +15,9 @@ described in Curtis, Banks and Beier 1997, *Computer-Generated Watercolor*
 | Path | Contents |
 |---|---|
 | `crates/nocturne-watercolour-core/` | Domain model, CPU reference simulation, Kubelka-Munk optics, application ports and use cases. `std`-only. |
-| `crates/nocturne-watercolour-infra/` | wgpu/WGSL simulation and rendering, versioned serde scene documents, PNG export, the artwork catalogue. |
+| `crates/nocturne-watercolour-infra/` | wgpu/WGSL simulation and rendering, versioned serde scene documents, PNG export, the artwork catalogue, Lucide icon authoring (`authoring/svg.rs`). |
 | `crates/nocturne-watercolour-wasm/` | wasm-bindgen web adapter (thin). |
-| `src/Web/packages/watercolour/` | `@nocturne/watercolour` - the TypeScript API, Svelte components, baked/static assets, wasm output. |
+| `src/Web/packages/watercolour/` | `@nocturne/watercolour` - the TypeScript API, Svelte components, baked/static assets, wasm output, per-icon hints (`src/api/icon-hints.ts`). `lucide` is a peer dependency: hosts supply icon element lists. |
 | `src/Web/packages/watercolour-showcase/` | `@nocturne/watercolour-showcase` - SvelteKit showcase app on port 5181. |
 
 ## What is where
@@ -37,6 +37,10 @@ described in Curtis, Banks and Beier 1997, *Computer-Generated Watercolor*
   limitations: [verification.md](verification.md)
 - **Provenance and licences** - the independent-implementation statement and
   every dependency's licence: [provenance-and-licences.md](provenance-and-licences.md)
+- **Authoring portability** - Lucide icons as watercolour scenes (the
+  closed-subpath-body / open-subpath-mark mapping, per-icon hints), the
+  JSON-vs-Rust authoring decision, and the mask rasteriser acceleration:
+  [authoring-portability.md](authoring-portability.md)
 
 ## Setup and build
 
@@ -102,6 +106,7 @@ decisions and measured numbers):
 | 3. Components + artwork catalogue + export/baked pipeline | **Implemented + tested**: 15 catalogue ids, curated baked assets (5.98 MB, tracked), palette fallback, accent components (fit prop, avatar release, dark opacity). Host-app reports-page integration added. |
 | 4. Showcase pages | **Implemented + tested**: twelve routes wired to the real package, `check`/`test`/`build` clean. Browser pass done (see verification). |
 | 5. Visual verification, performance measurement, docs | **Browser-verified** (Chrome 153, all routes; screenshots in `.playwright-mcp/stage3/`); visual review done (light surfaces strong, dark surfaces murky - see limitations); performance measured (native + browser). Multi-instance measurement and the live reveal at the biggest grids are the unverified remainder. |
+| 6. Lucide icons | **Implemented + tested**: `svg_icon_scene`/`iconScene` map a Lucide element list onto the stencil-and-mark pattern with per-icon hints, the showcase Playground plays them, and twelve Lucide icons (eleven wishlist proposals plus `cpu`) are baked into the curated asset set (96 files / 4.6 MB). |
 
 ## Limitations
 
@@ -119,6 +124,13 @@ In plain language, what this library does not yet do well:
   library (stale generated client); the watercolour integration adds none.
 - **Build agents could not view images**, so visual verdicts came from the
   coordinator and a dedicated vision review.
+- **The wasm module needs `wasm-opt` on the build machine** (`npm install -g
+  binaryen`): with it the module is 652,953 B / 274,570 B gzip; without it the
+  build script skips the pass and ships 966,642 B / 339,648 B gzip.
+- **The infra GPU tests must run in `--release`**: `reveal_preserves_the_artwork`
+  aborts with a native exit code partway through in debug builds on the
+  reference machine (the CPU-simulation tests are not feasible unoptimised) and
+  passes in release.
 
 ## The idea in one paragraph
 

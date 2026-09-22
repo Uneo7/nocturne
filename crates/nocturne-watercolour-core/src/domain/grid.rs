@@ -32,6 +32,9 @@ pub struct SimulationGrid {
     pub bleed_mask: Vec<f32>,
     /// Evaporation multiplier from the latest `Operation::Dry`.
     pub dry_rate: f32,
+    /// Share of the remaining film each tick takes, from the latest
+    /// `Operation::Settle`; `0` until one is applied.
+    pub settle_share: f32,
     /// How the renderer turns this state into pixels. Carried in the state
     /// (and its checkpoints) so every backend reads it from the same place;
     /// see `Scene::composite_mode`.
@@ -60,6 +63,7 @@ impl SimulationGrid {
             paper_height: paper.height.clone(),
             bleed_mask: vec![1.0; n],
             dry_rate: 1.0,
+            settle_share: 0.0,
             composite_mode: CompositeMode::Subtractive,
             aspect: paper.aspect,
         }

@@ -24,8 +24,14 @@ surrounding detail.
 | Edge darkening | wet-on-dry disc rims heavier than centre (asserted `> 1.15x`) |
 | Wet-on-wet spread | pre-wetted area spreads 90 % pigment radius `> 1.3x` further |
 | Playback | `tests/playback.rs`: seek-vs-replay bit-equality, finish-immediately dryness, front-loaded elapsed-time advance, checkpoint bound |
+| Mask raster | `tests/mask_raster.rs`: FNV-1a snapshot of `rasterize_mask_aspect` over 64 synthetic masks, captured from the original code and green on the accelerated one; degenerate polygons (fewer than three points) do not panic |
 
 ### `nocturne-watercolour-infra` (GPU needed; tests print and return early without an adapter)
+
+Run this suite with `--release`: `reveal_preserves_the_artwork` aborts with a
+native exit code partway through in debug builds on the reference machine (the
+CPU-simulation tests are not feasible unoptimised) and passes in release
+(7/7, ~7-14 min).
 
 | Area | What is asserted |
 |---|---|
@@ -34,6 +40,8 @@ surrounding detail.
 | Catalogue | `tests/catalogue.rs`: every id x palette x level x intensity validates; Small is simpler than Large; determinism; a CPU smoke render per id |
 | Export | `PngExporter` unpremultiply, sRGB round-trip, valid PNG header |
 | Scene tools (wasm crate) | every id builds on both surfaces with the same palette; unknown artwork/palette are typed; palette JSON documents accepted; surface/detail parsing; intensity monotone and in-bounds; strip stitching caps; manifest shape |
+| Mask hashes | `tests/mask_hashes.rs`: every catalogue `SetMask` at every detail and both grounds, rasterised at the scene's own resolution and aspect, folded into one FNV-1a hash per detail against literals from the original code |
+| Lucide icons | `tests/lucide.rs`: every test-set icon builds a valid scene for every detail and both grounds with the shipped hints; Small is simpler than Large; same inputs build identical scenes; `fill` moves exactly the named subpaths to bodies |
 
 ### Web (`@nocturne/watercolour`)
 
@@ -43,7 +51,8 @@ surrounding detail.
 | Mode resolution | `mode.test.ts`: `resolveMode` matrix (auto/reduced/live/baked/static) and `fallbackOrder` |
 | Baked manifest | `baked.test.ts`: `parseBakedManifest` caps (16 frames, 256 px), `stripFramePosition` mapping, load helpers |
 | Assets | `assets.test.ts`: `defaultPaletteFor` stays in sync with `scripts/bake-manifest.json`; bundled lookup and fallback |
-| Scene documents | `scenes.test.ts`: version-first rejection, `paletteKey` |
+| Scene documents | `scenes.test.ts`: version-first rejection, `paletteKey`, icon sources through `iconScene` (element list serialisation, built-in hints merged under caller hints, empty-hints default, the plain-SVG fallback), the vanilla `lucide` `IconNode` assignability |
+| Player static rung | `playback.test.ts`: `iconStaticBackend` routes a baked icon to its final and an unbaked one to the SVG backend |
 | Components | `components.test.ts`: `detailForEdge` thresholds, `seedFromName` determinism/FNV-1a, `artworkOptionsFrom` defaults, `hostSurface` |
 
 ### Showcase (`@nocturne/watercolour-showcase`)
@@ -61,6 +70,44 @@ Vitest unit tests for the synthetic data (`units`, `history`) and the
   reads as watercolour after the refinement pass; Luminous accepted for dark
   hosts; aspect-aware accents re-checked). All visual review was done by the
   orchestrator, not by the worker agents.
+
+## The reveal instruments
+
+Two `nocturne-watercolour-infra` examples exist to check the reveal rather
+than squint at it. Both are CPU-reference by default and take catalogue ids
+and palettes:
+
+```bash
+cargo run -p nocturne-watercolour-infra --example settle_probe --release -- crescent-moon 20
+cargo run -p nocturne-watercolour-infra --example reveal_timing --release -- <out_dir> crescent-moon moonlight 16
+```
+
+**`settle_probe`** (`[id] [every] [gpu]`) prints one row per sampled tick:
+tick, total water, wet-cell count, suspended pigment, deposited pigment. Read
+it against the tail: the water and wet-cell columns should fall to zero as the
+sheet dries, and the suspended-to-deposited handover is where the visible
+settling happens. A tail that "looks dead" is either out of water (nothing to
+act on), pigment already deposited (nothing left in suspension), or flow that
+stopped; the columns say which. A third argument of `gpu` runs the wgpu engine
+and reads the grid back each sample, so the two ports can be compared across
+the whole run rather than only at the finished frame.
+
+**`reveal_timing`** (`<out_dir> [id] [palette] [frames]`) renders `frames`
+evenly spaced in wall-clock progress: it seeks by progress, so it follows the
+playback's `Reveal` curve and lands in the viewer's time (the paint phase in
+the first ~600 ms, the tail over the rest) instead of the simulation's. It
+writes `frame-00.png`..`frame-NN.png`, a `strip.png` contact sheet over a
+light ground and `strip-dark.png` over a dark one (4-column grid, 256 px per
+cell), and prints per frame the wall-clock millisecond, simulation tick, mean
+absolute difference from the previous frame, covered area and alpha-weighted
+centroid. The verdict block prints the covered area at 25/50/100 % of the
+paint window (the pen should have most of the artwork down by the time the
+paint phase ends), whether the tail stays alive (its minimum frame-to-frame
+MAE, and whether it decays monotonically - a stall that then jumps is as wrong
+as a dead tail), and `--reference <dir>` diffs the final frame against an
+earlier run. Choreography flags (`--tip-scale`, `--paint-spread`,
+`--bloom-trail`, `--settle-fraction`, `--settle-budget`, `--wet-sheen`, ...)
+sweep parameters without rebuilding.
 
 ## Showcase browser pass
 
@@ -86,6 +133,27 @@ The visual review of those captures (the luminous review's Folder B) found:
 Perf: the existing single-instance numbers below stand; the multi-instance
 measurement (several artworks sharing one engine host) is pending.
 
+## Lucide visual review
+
+The eighteen Lucide-derived icons were rendered at 48 px and large, on light
+and dark ground, and reviewed in three batches by a vision model with the
+orchestrator adjudicating (PNGs in `scratchpad/out/lucide/`); the nine that
+failed or needed tuning were re-rendered with per-icon hints
+(`scratchpad/out/lucide-hinted/`).
+
+| Verdict | Icons |
+|---|---|
+| Pass as generated | `calendar`, `bell`, `phone`, `heart` (review A); `scale`, `megaphone`, `server`, `rocket` (review C) |
+| Pass large; small-size legibility needs tuning | `book-open`, `database` (review B) |
+| Fixed by the hint pass | `clock`, `database`, `flag`, `sprout` (hinted re-review) |
+| Partly fixed; small-size mark congestion remains | `cpu`, `fingerprint`, `battery`, `syringe`, `key` (hinted re-review) |
+| Cannot work from a line icon | none. `key` is the closest; the hand key (round head, visible hole, two teeth) stays the reference |
+
+The hint pass resolved every cleanly-structural failure (leaf fill, cutout
+closure, pole attachment, ellipse weight, hand contrast) and left the remaining
+problems as small-size mark congestion, which is tunable rather than structural.
+Nothing regressed between the plain and hinted renders.
+
 ## Measured performance
 
 ### Native GPU (NVIDIA GeForce RTX 5060 Laptop GPU, wgpu 30.0.1 via Vulkan, Windows 11, release)
@@ -102,20 +170,44 @@ From `examples/render_native.rs`, seed 42, 256^2 sim, 4 pigments:
 | CPU render 512^2 | 166 ms | 94 ms | 120 ms |
 | **CPU<->GPU finished frame, mean abs diff** (linear premultiplied RGBA, Subtractive) | 0.0010 (max 0.137) | 0.0003-0.0005 (max 0.067-0.093) | 0.0-0.00005 (max 0.005-0.103) |
 
-Whole-catalogue render (15 ids, the three detail levels that existed when it was
+Whole-catalogue render (every id, the three detail levels that existed when it was
 measured, both grounds) took 8.7 s.
 Small catalogue renders cost 20-50 ms on the GPU, Large 60-200 ms.
+
+### Mask rasteriser
+
+`rasterize_mask_aspect` went from `O(cells x points)` to `O(band area + cells)`
+with two bit-identical culling passes: each segment is walked only over its
+bounding box expanded by `feather + radius`, and the even-odd inside test is
+pre-bucketed per row. Median of 5 runs, `--release`, on the RTX 5060 Laptop
+(Vulkan):
+
+| Case | Before | After | Speed-up |
+|---|---:|---:|---:|
+| `Path` mask, 16 points, 384 grid | 5.95 ms | 0.23 ms | 25.6x |
+| `Path` mask, 96 points, 384 grid | 22.05 ms | 0.55 ms | 40.0x |
+| `Path` mask, 400 points, 384 grid | 116.2 ms | 1.69 ms | 68.7x |
+| `Polygon` mask, 96 points, 384 grid | 36.77 ms | 11.94 ms | 3.1x |
+| Whole catalogue, every `SetMask`, `Large` | 378.2 ms | 166.7 ms | 2.3x |
+| Whole catalogue, every `SetMask`, `ExtraLarge` | 792.2 ms | 382.0 ms | 2.1x |
+
+The `Path` variant (the one the flattened-SVG feature feeds) is 20-110x
+faster; `Polygon` 1.3-3.5x, bounded by the inside test. The final-gates run
+re-measured the whole catalogue at 165.4 ms (`Large`) and 391.3 ms
+(`ExtraLarge`), inside the mask worker's ranges. Bit-identity to the original
+output is asserted by the FNV-1a snapshot tests named above, which go red under
+a deliberately wrong band.
 
 ### Browser (Chrome 153, Windows 11, RTX 5060 Laptop GPU; 512^2 canvas, 256^2 sim grid, showcase defaults)
 
 | Measurement | Value |
 |---|---|
-| wasm module | 778 KB, 277 KB gzip |
+| wasm module | 652,953 B, 274,570 B gzip with `wasm-opt -Os` (binaryen 132); 966,642 B / 339,648 B gzip when the build machine lacks `wasm-opt` and the build script skips the pass. The `iconScene` surface added +163 KB raw / +56 KB gzip before optimisation. |
 | GPU init (adapter + device + pipeline compile, once per page) | 59-90 ms warm; ~2.1 s cold (`engine.stats().initMs`) |
 | First painted frame after a cold `createArtworkPlayer` | 1.1-1.6 s warm (from `performance.mark` around module load, engine init, first presented frame; the showcase exposes `watercolour:first-paint`) |
 | Steady-state scheduler cost | ~0.2 ms per frame (CPU step + render submission; `getScheduler().stats()` histogram) |
 | Checkpoints | ~44 MB per live instance in the browser (10 checkpoints at 256^2 x 4 pigments) |
-| Baked assets | 5.98 MB on disk (30 sets; strips ~120 KB, 512 px finals ~78 KB, 128 px finals ~7 KB) |
+| Baked assets | 5.4 MB on disk as WebP, from 20.3 MB as PNG (400 files: 100 sets x 4 files, of which the twelve `lucide-<name>` sets are 96) |
 
 Methodology: `performance.mark`/`performance.now` around module load,
 `WatercolourEngine.create`, first paint and each scheduler tick; single-run

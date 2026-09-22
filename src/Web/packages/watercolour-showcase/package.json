@@ -30,6 +30,7 @@
 	},
 	"dependencies": {
 		"@nocturne/ui": "workspace:*",
-		"@nocturne/watercolour": "workspace:*"
+		"@nocturne/watercolour": "workspace:*",
+		"lucide": "^1.47.0"
 	}
 }

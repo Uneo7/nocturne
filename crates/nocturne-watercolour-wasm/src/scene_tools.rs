@@ -1,7 +1,6 @@
 //! Scene construction and export helpers shared by the browser bindings and
 //! the native bake example.
 
-use nocturne_watercolour_core::application::settle_rate_for;
 use nocturne_watercolour_core::domain::scene::MAX_CONCENTRATION;
 use nocturne_watercolour_core::domain::{
     Background, Image, Operation, Palette, PaletteEntry, Pigment, PigmentRole, Rgb, Scene, Seed,
@@ -9,6 +8,9 @@ use nocturne_watercolour_core::domain::{
 };
 use nocturne_watercolour_infra::authoring::ArtworkCatalogue;
 pub use nocturne_watercolour_infra::authoring::DetailLevel;
+use nocturne_watercolour_infra::authoring::{
+    parse_icon_elements, parse_icon_hints, svg_icon_scene,
+};
 use nocturne_watercolour_infra::document::{PaletteDoc, scene_to_json};
 use serde::Serialize;
 
@@ -19,47 +21,11 @@ pub const DEFAULT_INTENSITY: f32 = 0.7;
 /// a tail (0 leaves the authored timeline untouched).
 pub const DEFAULT_SETTLE_FRACTION: f32 = 0.3;
 
-/// Evaporation rate of a settle phase inserted into a scene that has none.
-const SETTLE_INSERT_RATE: f32 = 3.0;
-
-/// Lengthens the reveal's drying tail so the final `fraction` of ticks settle
-/// and dry: the last `Dry { rate }` event starts no later than `1 - fraction`
-/// of the way through, and a scene with no settle phase gets one. The tail's
-/// evaporation rate is scaled inversely with `fraction` (see
-/// [`settle_rate_for`]) so a longer tail dries slower and keeps changing to
-/// the end instead of holding a dry frame. Applied after authoring, so any
-/// backend can request it without re-authoring the artwork.
+/// [`nocturne_watercolour_core::application::apply_settle_fraction`] over the
+/// scene's timeline, so the browser bindings keep addressing it through the
+/// scene rather than its timeline.
 pub fn apply_settle_fraction(scene: &mut Scene, fraction: f32) {
-    let f = fraction.clamp(0.0, 1.0);
-    if f <= 0.0 {
-        return;
-    }
-    let total = scene.timeline.total_ticks;
-    let start = ((1.0 - f) * total as f32).round() as u32;
-    let last_dry = scene
-        .timeline
-        .events
-        .iter()
-        .rposition(|e| matches!(e.op, Operation::Dry { .. }));
-    match last_dry {
-        Some(idx) if scene.timeline.events[idx].at_tick > start => {
-            let event = scene.timeline.events.remove(idx);
-            let rate = match event.op {
-                Operation::Dry { rate } => settle_rate_for(f, rate),
-                _ => SETTLE_INSERT_RATE,
-            };
-            scene.timeline.push(start, Operation::Dry { rate });
-        }
-        Some(_) => {}
-        None => {
-            scene.timeline.push(
-                start,
-                Operation::Dry {
-                    rate: settle_rate_for(f, SETTLE_INSERT_RATE),
-                },
-            );
-        }
-    }
+    nocturne_watercolour_core::application::apply_settle_fraction(&mut scene.timeline, fraction);
 }
 
 /// Frame-strip limits mirrored by the TypeScript manifest validator.
@@ -75,6 +41,7 @@ pub enum SceneToolError {
     InvalidPalette(String),
     InvalidScene(String),
     InvalidStrip(String),
+    InvalidIcon(String),
 }
 
 impl std::fmt::Display for SceneToolError {
@@ -85,6 +52,7 @@ impl std::fmt::Display for SceneToolError {
             SceneToolError::InvalidPalette(m) => write!(f, "InvalidPalette: {m}"),
             SceneToolError::InvalidScene(m) => write!(f, "InvalidScene: {m}"),
             SceneToolError::InvalidStrip(m) => write!(f, "InvalidStrip: {m}"),
+            SceneToolError::InvalidIcon(m) => write!(f, "InvalidIcon: {m}"),
         }
     }
 }
@@ -356,6 +324,43 @@ pub fn catalogue_scene_json_with_resolution(
     scene_to_json(&scene).map_err(|e| SceneToolError::InvalidScene(e.to_string()))
 }
 
+/// A watercolour scene for a Lucide icon: parses the element list, authors it
+/// with the catalogue's stencil-and-fill mapping and returns the scene JSON.
+/// `hints_json` is the per-icon tuning (`""` keeps the defaults).
+#[allow(clippy::too_many_arguments)]
+pub fn icon_scene_json(
+    elements_json: &str,
+    name: &str,
+    seed: Seed,
+    palette: &str,
+    intensity: f32,
+    detail: DetailLevel,
+    surface: Surface,
+    sim_resolution: Option<u32>,
+    hints_json: &str,
+) -> Result<String, SceneToolError> {
+    let palette = parse_palette(palette)?;
+    let elements = parse_icon_elements(elements_json)
+        .map_err(|e| SceneToolError::InvalidIcon(e.to_string()))?;
+    let hints =
+        parse_icon_hints(hints_json).map_err(|e| SceneToolError::InvalidIcon(e.to_string()))?;
+    let scene = svg_icon_scene(
+        name,
+        &elements,
+        seed,
+        &palette,
+        intensity,
+        detail,
+        surface.background(),
+        sim_resolution,
+        &hints,
+    );
+    scene
+        .validate()
+        .map_err(|e| SceneToolError::InvalidScene(format!("{e:?}")))?;
+    scene_to_json(&scene).map_err(|e| SceneToolError::InvalidScene(e.to_string()))
+}
+
 /// Stacks equally sized frames top to bottom into one image.
 pub fn stitch_vertical(frames: &[Image]) -> Result<Image, SceneToolError> {
     let first = frames
@@ -416,6 +421,7 @@ impl BakedManifest {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use nocturne_watercolour_infra::document::parse_scene_json;
 
     const LARGE: DetailLevel = DetailLevel::Large;
 
@@ -445,6 +451,94 @@ mod tests {
                 "{id} small"
             );
         }
+    }
+
+    #[test]
+    fn icon_scene_builds_and_rejects_bad_elements() {
+        let clock = r#"[["circle",{"cx":"12","cy":"12","r":"10"}],["path",{"d":"M12 6v6l4 2"}]]"#;
+        for surface in [Surface::Light, Surface::Dark] {
+            let scene = icon_scene_json(
+                clock,
+                "clock",
+                Seed(7),
+                "moonlight",
+                0.7,
+                LARGE,
+                surface,
+                None,
+                "",
+            )
+            .unwrap();
+            assert!(scene.contains("\"id\": \"lucide-clock-moonlight-7\""));
+            assert!(parse_scene_json(&scene).is_ok());
+        }
+        let e = icon_scene_json(
+            "[[",
+            "clock",
+            Seed(1),
+            "moonlight",
+            0.7,
+            LARGE,
+            Surface::Light,
+            None,
+            "",
+        )
+        .unwrap_err();
+        assert!(e.to_string().starts_with("InvalidIcon: "));
+    }
+
+    #[test]
+    fn icon_scene_hints_change_the_bodies() {
+        let database = r#"[["ellipse",{"cx":"12","cy":"5","rx":"9","ry":"3"}],["path",{"d":"M3 5V19A9 3 0 0 0 21 19V5"}],["path",{"d":"M3 12A9 3 0 0 0 21 12"}]]"#;
+        let plain = icon_scene_json(
+            database,
+            "database",
+            Seed(7),
+            "moonlight",
+            0.7,
+            LARGE,
+            Surface::Light,
+            None,
+            "",
+        )
+        .unwrap();
+        let filled = icon_scene_json(
+            database,
+            "database",
+            Seed(7),
+            "moonlight",
+            0.7,
+            LARGE,
+            Surface::Light,
+            None,
+            r#"{"fill":[1]}"#,
+        )
+        .unwrap();
+        assert_ne!(plain, filled);
+        let masks = |json: &str| {
+            let scene = parse_scene_json(json).unwrap();
+            scene
+                .timeline
+                .events
+                .iter()
+                .filter(|e| matches!(&e.op, Operation::SetMask(_)))
+                .count()
+        };
+        assert_eq!(masks(&plain), 1);
+        assert_eq!(masks(&filled), 2);
+        let bad = icon_scene_json(
+            database,
+            "database",
+            Seed(7),
+            "moonlight",
+            0.7,
+            LARGE,
+            Surface::Light,
+            None,
+            r#"{"markRole":"neon"}"#,
+        )
+        .unwrap_err();
+        assert!(bad.to_string().starts_with("InvalidIcon: "));
     }
 
     #[test]
@@ -582,82 +676,5 @@ mod tests {
             json,
             r#"{"version":1,"frames":12,"width":256,"height":256,"durationMs":600,"layout":"vertical"}"#
         );
-    }
-
-    fn last_dry_tick(scene: &Scene) -> u32 {
-        scene
-            .timeline
-            .events
-            .iter()
-            .filter(|e| matches!(e.op, Operation::Dry { .. }))
-            .map(|e| e.at_tick)
-            .max()
-            .unwrap_or(0)
-    }
-
-    fn tail_dry_rate(scene: &Scene) -> f32 {
-        scene
-            .timeline
-            .events
-            .iter()
-            .filter_map(|e| match e.op {
-                Operation::Dry { rate } => Some((e.at_tick, rate)),
-                _ => None,
-            })
-            .max_by_key(|(t, _)| *t)
-            .map(|(_, rate)| rate)
-            .unwrap_or(0.0)
-    }
-
-    #[test]
-    fn settle_fraction_lengthens_the_tail_and_inserts_when_missing() {
-        let light = Surface::Light;
-        let base = catalogue_scene("wash", Seed(3), "water", 0.7, LARGE, light).unwrap();
-        let total = base.timeline.total_ticks;
-        let mut scene = base.clone();
-        apply_settle_fraction(&mut scene, 0.3);
-        let lengthened = last_dry_tick(&scene);
-        assert_eq!(
-            lengthened,
-            last_dry_tick(&base),
-            "wash already settles early"
-        );
-        assert!(lengthened <= ((1.0 - 0.3) * total as f32).round() as u32);
-        assert_eq!(
-            tail_dry_rate(&scene),
-            tail_dry_rate(&base),
-            "the default fraction leaves the authored rate alone"
-        );
-
-        let authored = tail_dry_rate(&base);
-        let mut reloc = base.clone();
-        apply_settle_fraction(&mut reloc, 0.5);
-        assert_eq!(
-            last_dry_tick(&reloc),
-            ((1.0 - 0.5) * total as f32).round() as u32,
-            "relocating the authored settle to the requested tail start"
-        );
-        assert!(
-            (tail_dry_rate(&reloc) - settle_rate_for(0.5, authored)).abs() < 1e-4,
-            "relocation scales the authored rate for the longer tail"
-        );
-
-        let mut bare = catalogue_scene("wash", Seed(3), "water", 0.7, LARGE, light).unwrap();
-        bare.timeline
-            .events
-            .retain(|e| !matches!(e.op, Operation::Dry { .. }));
-        apply_settle_fraction(&mut bare, 0.5);
-        assert_eq!(
-            last_dry_tick(&bare),
-            ((1.0 - 0.5) * bare.timeline.total_ticks as f32).round() as u32
-        );
-        assert!(
-            (tail_dry_rate(&bare) - settle_rate_for(0.5, SETTLE_INSERT_RATE)).abs() < 1e-4,
-            "the inserted settle scales its rate for the tail length"
-        );
-
-        let mut untouched = base.clone();
-        apply_settle_fraction(&mut untouched, 0.0);
-        assert_eq!(untouched.timeline, base.timeline);
     }
 }

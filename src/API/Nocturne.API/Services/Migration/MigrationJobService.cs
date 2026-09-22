@@ -416,6 +416,14 @@ internal class MigrationJob
     private DateTime _startedAt;
     private DateTime? _completedAt;
     private readonly ConcurrentDictionary<string, CollectionProgress> _collectionProgress = new();
+
+    /// <summary>
+    /// Newest source timestamp this run actually brought across, for
+    /// <see cref="MigrationSourceEntity.LastMigratedDataTimestamp"/>. Collections are pulled one
+    /// after another on the job's own task, so a plain field suffices.
+    /// </summary>
+    private DateTime? _newestMigratedData;
+
     private static readonly System.Text.Json.JsonSerializerOptions s_caseInsensitiveJson = new() { PropertyNameCaseInsensitive = true };
 
     /// <summary>
@@ -614,6 +622,14 @@ internal class MigrationJob
             {
                 var source = await db.MigrationSources.FirstAsync(s => s.Id == sourceId, ct);
                 source.LastMigrationAt = _completedAt ?? DateTime.UtcNow;
+
+                // A run bounded to an older date range covers ground an earlier run already
+                // covered, so the watermark only ever advances.
+                if (_newestMigratedData is { } newest
+                    && newest > (source.LastMigratedDataTimestamp ?? DateTime.MinValue))
+                {
+                    source.LastMigratedDataTimestamp = newest;
+                }
             }
 
             await db.SaveChangesAsync(ct);
@@ -626,6 +642,12 @@ internal class MigrationJob
 
     private long MigratedCount(string collection) =>
         _collectionProgress.TryGetValue(collection, out var p) ? p.DocumentsMigrated : 0;
+
+    private void ObserveDataWatermark(DateTime? candidate)
+    {
+        if (candidate is { } stamp && stamp > (_newestMigratedData ?? DateTime.MinValue))
+            _newestMigratedData = stamp;
+    }
 
     /// <summary>
     /// Finds or creates the migration source row for this job's target. Sources dedupe per
@@ -1090,34 +1112,37 @@ internal class MigrationJob
     private const int ApiPageSize = LegacyReadLimits.MaxMergedCount;
 
     /// <summary>
-    ///     How a paged pull bounds and advances its time cursor: <paramref name="Filter"/> is the
-    ///     query-string fragment restricting a page to records at or before the cursor, and
+    ///     How a paged pull bounds and advances its time cursor. <paramref name="Filter"/> is the
+    ///     query-string fragment restricting a page to records at or before the cursor.
     ///     <paramref name="Oldest"/> reads the page's oldest record, answering <c>null</c> when the
-    ///     page carries no usable timestamp to page back from.
+    ///     page carries no usable timestamp to page back from. <paramref name="Newest"/> reads the
+    ///     page's newest, for <see cref="MigrationSourceEntity.LastMigratedDataTimestamp"/>.
     /// </summary>
     private sealed record PageCursor(
         Func<DateTime, string> Filter,
-        Func<IReadOnlyList<ProcessableDocumentBase>, DateTime?> Oldest
+        Func<IReadOnlyList<ProcessableDocumentBase>, DateTime?> Oldest,
+        Func<IReadOnlyList<ProcessableDocumentBase>, DateTime?> Newest
     );
 
     /// <summary>Entries page on the numeric <c>date</c> field, which mirrors mills exactly.</summary>
     private static readonly PageCursor s_dateCursor = new(
         to => $"&find[date][$lte]={new DateTimeOffset(to, TimeSpan.Zero).ToUnixTimeMilliseconds()}",
-        page =>
-        {
-            var oldestMs = page.Min(d => d.Mills);
-            return oldestMs <= 0
-                ? null
-                : DateTimeOffset.FromUnixTimeMilliseconds(oldestMs).UtcDateTime;
-        });
+        page => FromMills(page.Min(d => d.Mills)),
+        page => FromMills(page.Max(d => d.Mills)));
 
     /// <summary>Every other collection pages on the ISO-8601 <c>created_at</c> string.</summary>
     private static readonly PageCursor s_createdAtCursor = new(
         to => $"&find[created_at][$lte]={to.ToUniversalTime():o}",
-        page => page
+        page => CreatedAtStamps(page).Min(),
+        page => CreatedAtStamps(page).Max());
+
+    private static DateTime? FromMills(long mills) =>
+        mills <= 0 ? null : DateTimeOffset.FromUnixTimeMilliseconds(mills).UtcDateTime;
+
+    private static IEnumerable<DateTime?> CreatedAtStamps(IReadOnlyList<ProcessableDocumentBase> page) =>
+        page
             .Select(d => DateTimeOffset.TryParse(d.CreatedAt, out var dto) ? dto.UtcDateTime : (DateTime?)null)
-            .Where(dt => dt.HasValue)
-            .Min());
+            .Where(dt => dt.HasValue);
 
     /// <summary>
     ///     A legacy collection pulled page by page over a time cursor. <paramref name="Name"/> is
@@ -1198,6 +1223,7 @@ internal class MigrationJob
             {
                 await decompose(page, ct);
                 totalMigrated += page.Length;
+                ObserveDataWatermark(collection.Cursor.Newest(page));
             }
             catch (Exception ex)
             {

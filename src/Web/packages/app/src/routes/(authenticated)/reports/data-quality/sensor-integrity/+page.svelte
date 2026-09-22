@@ -7,13 +7,12 @@
     CardTitle,
   } from "$lib/components/ui/card";
   import ArrowLeft from "lucide-svelte/icons/arrow-left";
-  import Activity from "lucide-svelte/icons/activity";
   import Info from "lucide-svelte/icons/info";
   import Moon from "lucide-svelte/icons/moon";
   import { getDataQualityReport } from "$api/reports.remote";
   import { requireDateParamsContext } from "$lib/hooks/date-params.svelte";
   import { contextResource } from "$lib/hooks/resource-context.svelte";
-  import { buildDayBuckets, type DayBucket } from "$lib/components/reports/sensor-integrity/buckets";
+   import { buildDayBuckets, type DayBucket } from "$lib/components/reports/sensor-integrity/buckets";
   import NoiseClusterStrips from "$lib/components/reports/sensor-integrity/NoiseClusterStrips.svelte";
   import NoiseDayChart from "$lib/components/reports/sensor-integrity/NoiseDayChart.svelte";
   import DataQualityHeadline from "$lib/components/reports/sensor-integrity/DataQualityHeadline.svelte";
@@ -63,16 +62,11 @@
         <ArrowLeft class="h-4 w-4" />
         Data Quality
       </a>
-      <div class="flex items-center gap-3">
-        <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10">
-          <Activity class="h-5 w-5 text-primary" />
-        </div>
-        <div>
-          <h1 class="text-2xl font-bold tracking-tight">Signal Integrity</h1>
-          <p class="text-muted-foreground">
-            Windows where readings oscillate in a way that is unlikely to be physiologic
-          </p>
-        </div>
+      <div>
+        <h1 class="text-2xl font-bold tracking-tight">Signal Integrity</h1>
+        <p class="text-muted-foreground">
+          Windows where readings oscillate in a way that is unlikely to be physiologic
+        </p>
       </div>
     </div>
 

@@ -7,6 +7,8 @@
     AlertTriangle,
     UserPlus,
   } from "lucide-svelte";
+  import { Artwork } from "@nocturne/watercolour";
+  import { fingerprintArtwork } from "$lib/watercolour-icons";
   import {
     startRegistration,
     type PublicKeyCredentialCreationOptionsJSON,
@@ -273,11 +275,13 @@
     {:else}
       <!-- Not authenticated — show OIDC + passkey options -->
       <Card.Header class="space-y-1 text-center">
-        <div
-          class="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-primary/10"
-        >
-          <UserPlus class="h-6 w-6 text-primary" />
-        </div>
+        <Artwork
+          icon={fingerprintArtwork}
+          palette="water"
+          motion="auto"
+          autoplay="once"
+          class="mx-auto mb-4 size-56"
+        />
         <Card.Title class="text-2xl font-bold">Join Nocturne</Card.Title>
         <Card.Description>
           {#if inviteInfo.createdByName}

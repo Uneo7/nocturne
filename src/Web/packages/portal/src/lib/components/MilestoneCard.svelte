@@ -7,7 +7,8 @@
         Calendar,
         ExternalLink,
         ChevronDown,
-    } from "@lucide/svelte";
+    Flag,
+} from "@lucide/svelte";
 
     interface Props {
         milestone: RoadmapMilestone;
@@ -78,6 +79,7 @@
         <Collapsible.Trigger class="w-full text-left">
             <div class="p-6 hover:bg-muted/30 transition-colors cursor-pointer">
                 <div class="flex items-start justify-between gap-4 mb-4">
+                    <Flag class="size-6 shrink-0 text-amber-500" />
                     <div class="flex-1">
                         <div class="flex items-center gap-2 mb-2">
                             {#if status === "completed"}

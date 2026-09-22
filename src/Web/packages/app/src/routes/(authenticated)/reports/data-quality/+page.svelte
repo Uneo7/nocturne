@@ -12,7 +12,7 @@
 		triggerDetection as triggerCompressionLowDetection
 	} from '$api/generated/compressionLows.generated.remote';
 	import { contextResource } from '$lib/hooks/resource-context.svelte';
-	import ShieldCheck from 'lucide-svelte/icons/shield-check';
+		import ShieldCheck from 'lucide-svelte/icons/shield-check';
 	import Activity from 'lucide-svelte/icons/activity';
 	import Waves from 'lucide-svelte/icons/waves';
 	import GitCompareArrows from 'lucide-svelte/icons/git-compare-arrows';
@@ -88,6 +88,7 @@
 				<p class="text-muted-foreground">Monitor and manage data exclusions</p>
 			</div>
 		</div>
+
 
 		<!-- Summary Stats -->
 		<div class="grid gap-4 @lg:grid-cols-3">

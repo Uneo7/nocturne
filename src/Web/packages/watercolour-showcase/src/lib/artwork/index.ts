@@ -1,5 +1,7 @@
 import {
   Artwork,
+  DropGroup,
+  DropSurface,
   PaintedUnderline,
   SelectionEdge,
   AvatarWash,
@@ -9,6 +11,7 @@ import {
   PALETTE_IDS,
   DEFAULT_INTENSITY,
   DEFAULT_DURATION_MS,
+  DEFAULT_MAX_LIVE_INSTANCES,
   seedFromName,
   detailForEdge,
   createArtworkPlayer,
@@ -19,6 +22,8 @@ import {
 
 export {
   Artwork,
+  DropGroup,
+  DropSurface,
   PaintedUnderline,
   SelectionEdge,
   AvatarWash,
@@ -28,6 +33,7 @@ export {
   PALETTE_IDS,
   DEFAULT_INTENSITY,
   DEFAULT_DURATION_MS,
+  DEFAULT_MAX_LIVE_INSTANCES,
   seedFromName,
   detailForEdge,
   createArtworkPlayer,
@@ -55,4 +61,11 @@ export type {
   EngineHostOptions,
   EngineLease,
   FrameStats,
+  DropFont,
+  DropFonts,
+  DropMark,
+  DropPlan,
+  DropReveal,
+  DropSignature,
+  PlacedDrop,
 } from '@nocturne/watercolour';

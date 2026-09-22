@@ -24,8 +24,8 @@ presentation (TS API, Svelte components, showcase)    <- @nocturne/watercolour +
 | Layer | Location | Contents |
 |---|---|---|
 | Domain | `core/src/domain/` | Pigments, palettes, paper, operations, timeline, scene validation, the simulation grid, the reference simulation step, stamp rasterisation, Kubelka-Munk optics, the `Image` type. Pure data and pure functions; no I/O, no GPU, no serialisation, no wall clock. |
-| Application | `core/src/application/` | The ports a backend implements, the reference `CpuEngine` (ports implemented with domain code), the `Playback` controller, command-style use cases, the `Reveal` timeline builder. Callers supply elapsed time; nothing here schedules. |
-| Infrastructure | `infra/src/` | `gpu` (wgpu/WGSL `Simulator` + `Renderer`), `document` (serde `SceneDocumentV1`), `export` (PNG, frame sequences), `authoring` (artwork catalogue). Everything platform-specific lives here so core stays `std`-only. |
+| Application | `core/src/application/` | The ports a backend implements, the reference `CpuEngine` (ports implemented with domain code), the `Playback` controller, command-style use cases, the `Reveal` timeline builder, and the `choreography` timeline transform. Callers supply elapsed time; nothing here schedules. |
+| Infrastructure | `infra/src/` | `gpu` (wgpu/WGSL `Simulator` + `Renderer`), `document` (serde `SceneDocumentV1`), `export` (PNG, frame sequences), `authoring` (artwork catalogue, Lucide icon authoring in `svg.rs`). Everything platform-specific lives here so core stays `std`-only. |
 | Web adapter | `wasm/src/` | `web.rs`: the wasm-bindgen surface (one shared `WatercolourEngine`, per-scene `SceneInstance`); `scene_tools.rs`: platform-neutral scene construction, intensity, strip stitching, the baked manifest. |
 | Presentation | `src/Web/packages/watercolour/` | `src/api/*.ts` (player, capabilities, engine host, scheduler, mode resolution, baked/static assets, scene documents), `src/components/*.svelte`, baked assets in `assets/`, wasm output in `src/wasm/`. The showcase app (`watercolour-showcase`) renders the components across its routes. |
 
@@ -47,6 +47,49 @@ drives a scene through its timeline with play/pause/reset/seek/finish and an
 artistic duration mapping, and `Reveal` (`reveal.rs`) builds a standard
 mask/wash/drop-in/glaze timeline. Hosts supply elapsed time by calling
 `advance_by_elapsed` from their frame clock; the engine never schedules.
+
+## The choreography pass
+
+`application::choreography` (`choreography.rs`) is a timeline-to-timeline
+transform that makes a reveal read as drawn. Applied at one choke point,
+`authoring::choreograph_scene` (called from `ArtworkCatalogue::by_id_for_with_resolution`
+and the legacy `wash`/`crescent_moon`/`glaze_pair` constructors), so the bake,
+the native examples and the live path all get the same reveal. Each authored
+stroke becomes a narrow, wet tip track walking its path, with a `Water` halo
+at the authored radius trailing a few ticks behind for pigment to bloom into.
+Invariants: the footprint is unchanged (the halo is the authored stamp),
+pigment and water totals are preserved (tip concentration and water scale by
+`1/tip_scale`, the authored water is split between tip and halo), and nothing
+crosses a `Dry`/`DryAll`/`SetMask`/`ClearMask` boundary. Strokes are sequenced
+across a budget of `paint_spread * paint_end`, paced by path length, so the
+pen draws one mark after another. `choreograph_scene_with` plus
+`by_id_for_unchoreographed` are the seam for tuning.
+
+## Progress curves
+
+`Playback` maps wall-clock progress `p in 0..1` to simulation ticks through
+one of three `ProgressCurve`s (`application/playback.rs`):
+
+| Curve | Mapping | Used when |
+|---|---|---|
+| `FrontLoaded` | `ease(p) = 1 - (1 - p)^2` | the original default: the wash lands fast, then settles |
+| `Linear` | `tick = round(p * total_ticks)`, one-for-one | a caller drives `advance_to_progress` with its own easing |
+| `Reveal { wall_split, tick_split }` | piecewise linear: `tick_split` of the ticks run inside `wall_split` of the wall clock, the rest over the rest | the default curve for every `Playback` |
+
+`Reveal` separates wall-clock from simulation ticks because the paint phase
+needs many ticks inside its ~600 ms while drying needs few over the ~2.4 s
+tail; running the whole tail at paint tick rate would blow the frame budget.
+`wall_split` defaults to `DEFAULT_PAINT_WALL_FRACTION` (0.2); `tick_split` is
+read off the scene by `ProgressCurve::reveal_for` as the tick of the scene's
+**last stroke event** — the moment the pen leaves the paper — so the wall-clock
+paint phase covers exactly the brushwork and the tail covers the spread, bloom,
+settling and drying that follow it. A timeline with no strokes falls back to its
+last `Dry`, then to `0.3`, and both splits are clamped to `0.05..0.95` so
+neither phase can degenerate to zero length.
+On the wasm surface, `setProgressCurve("reveal")` rebuilds the curve for the
+loaded scene at the default paint fraction, and `createInstance(..., settleFraction,
+paintWallFraction)` overrides the split per instance; the TypeScript `tail`
+option is the complement (`1 - tail`) of `paintWallFraction`.
 
 ## How the boundary is enforced
 
@@ -91,6 +134,25 @@ generate_with_aspect`, `paint::rasterize_path_aspect` / `rasterize_mask_aspect`
 and `SimulationGrid::aspect` (packed in the state header) carry the aspect;
 the fluid step itself is deliberately square-metric.
 
+**Lucide icons.** A Lucide icon is a 24-grid element list (`[tag, attrs]`
+pairs: `path`, `circle`, `rect`, `line`, `ellipse`, `polyline`, `polygon`).
+`authoring/svg.rs` flattens each element to subpaths tagged closed/open (the
+path grammar `M L H V C S Q T A Z` absolute and relative, cubic/quadratic
+subdivision, arcs sampled via the endpoint-to-centre parametrisation), maps
+the 24 grid into `0.1..0.9` of the square frame, and paints the hand-authored
+pattern: closed subpaths stencilled and filled as `BaseWash` bodies, open ones
+laid wet-on-dry as `Shadow` marks at the Lucide stroke radius. An icon with no
+closed subpath lays its longest open one as a fat body wash instead. Per-icon
+hints (`fill`, `markRadius`, `smallMarks`, `holes`, `bodyRole`, `markRole`)
+tune that mapping where the generic one fails - open silhouettes that never
+fill, and too many marks at 48 px; `IconHints::default()` is the untuned
+behaviour and the TypeScript `ICON_HINTS` table ships the tuned entries. The
+JSON crosses the wasm boundary at `iconScene`: the TypeScript side serialises
+the element list and the merged hints and passes them to the binding,
+`parse_icon_elements` / `parse_icon_hints` parse them, `svg_icon_scene` authors
+the scene (id `lucide-<name>-<palette>-<seed>`), and the finished scene JSON
+returns for the engine to load.
+
 ## Which simulation rules run in shaders
 
 | Shader | Entry points | Rule (CPU reference) | Deviation from CPU reference |
@@ -108,6 +170,23 @@ and uploaded as a coverage field, so both backends see identical geometry. Share
 constants in the shaders (`DRAIN_DEPTH`, `ALPHA_SOFTNESS`, `LUMINOUS_*`, ...)
 mirror the `pub const`s in `domain::sim`, `domain::paint` and `domain::optics`;
 tunable parameters travel in the `Params` uniform.
+
+### Stamps and masks
+
+`rasterize_mask_aspect` was `O(cells x points)` - distance to every outline
+segment for every cell, plus an even-odd cast over every edge. Two culling
+passes make it `O(band area + cells)`, both bit-identical: each segment is
+walked only over its bounding box expanded by `feather + radius` (a cell
+farther than that is `0` for that segment), and the even-odd inside test is
+pre-bucketed per row so a cell casts only against the edges its row's y-range
+spans; cells outside the polygon's vertex bounding box skip the cast entirely.
+The `Path` variant (the one the flattened-SVG feature feeds) runs 20-110x
+faster, `Polygon` 1.3-3.5x. Bit-identity is proven by FNV-1a snapshot tests
+over 64 synthetic masks (`core/tests/mask_raster.rs`) and over every catalogue
+`SetMask` at every detail and both grounds (`infra/tests/mask_hashes.rs`),
+captured from the original code and shown to go red under a deliberately wrong
+band; degenerate polygons (fewer than three points) fall back to an empty
+per-row edge table rather than panicking.
 
 ### Known CPU/GPU deviations
 
@@ -138,8 +217,36 @@ checkpoint is released, and if none remain no more are taken. Capacity is
 `Playback` falls back to reload-and-replay from tick 0 when no checkpoint
 precedes the seek target. Seeking restores the nearest checkpoint at or before
 the target and replays; `seek(t)` + `step` is bit-identical to a straight run
-(tested on the CPU engine). Ticks are encoded in batches of up to 64 per
-command buffer.
+(tested on the CPU engine).
+
+## GPU work bounds
+
+Every buffer, command buffer and dispatch the engine issues is bounded ahead
+of the driver (`infra/src/gpu/engine.rs`), so no scene, canvas or replay can
+grow one past what the device can carry or run one past the two-second
+watchdog Windows resets the display driver at:
+
+- **Allocations are checked against the device limits** before creation
+  (`max_buffer_size`, and `max_storage_buffer_binding_size` for storage
+  buffers) and refused with an `EngineError`. wgpu reports an oversized buffer
+  as an uncaptured error after the fact, which would fault the device for
+  every instance sharing it.
+- **Ticks are encoded sixteen per command buffer** (`TICKS_PER_SUBMIT`), a few
+  tens of milliseconds at the 512^2 maximum on an integrated GPU.
+- **The optics pass is dispatched in row bands** of at most 2^20 output pixels
+  (`RENDER_PIXELS_PER_DISPATCH`), each its own submission, so a large canvas or
+  export raises the number of dispatches rather than the length of one.
+- **At most 32 submissions are in flight natively** (`MAX_IN_FLIGHT_SUBMISSIONS`):
+  the 33rd blocks on the oldest, so an unattended replay (bake, tests) cannot
+  pin unbounded driver memory. The browser paces its own queue.
+- **Blocking waits time out** after 30 s (`GPU_WAIT_TIMEOUT`) and return an
+  error instead of stalling the process on a wedged driver.
+- **Device errors are recorded, not panicked.** The context installs an
+  uncaptured-error handler; the first validation/out-of-memory/internal error
+  is kept and every later submission returns it (`GpuContext::check`). Natively
+  wgpu's default handler would abort the process; in wasm it would leave the
+  module unusable. The readback staging buffer is created on first readback,
+  so a presenting instance never holds one.
 
 ## Future native integration points
 

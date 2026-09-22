@@ -6,16 +6,31 @@
 mod accents;
 mod geometry;
 mod icons;
+mod icons_objects;
+mod icons_places;
+mod icons_time;
+mod icons_vitals;
 mod scenes;
+mod svg;
 
+pub use nocturne_watercolour_core::application::Choreography;
+use nocturne_watercolour_core::application::{
+    apply_settle_fraction, choreograph, settle_after_last_stroke, settle_share_for_ticks,
+};
 use nocturne_watercolour_core::domain::scene::{MAX_CONCENTRATION, MAX_WATER};
 use nocturne_watercolour_core::domain::seed::SeedStream;
 use nocturne_watercolour_core::domain::{
     Background, BrushStroke, LiftStroke, Mask, Operation, Palette, Paper, PigmentRole, Point,
-    RadiusProfile, Scene, SceneId, Seed, SimResolution, SizeHint, SubSeed, Timeline, WaterStroke,
+    RadiusProfile, Scene, SceneId, Seed, SimResolution, SizeHint, StrokeSpan, SubSeed, Timeline,
+    WaterStroke,
 };
 
+use geometry::Frame;
 pub use scenes::{glaze_pair, wash};
+pub use svg::{
+    FLATTEN_TOLERANCE, IconHints, IconNode, SubPath, parse_icon_elements, parse_icon_hints,
+    svg_icon_scene,
+};
 
 pub type ArtworkFn = fn(Seed, Palette) -> Scene;
 
@@ -95,6 +110,29 @@ impl ArtworkCatalogue {
         "selection-edge",
         "confirmation-background",
         "header-motif",
+        "calendar",
+        "clock",
+        "stopwatch",
+        "sunrise",
+        "footprints",
+        "apple",
+        "pizza-slice",
+        "spanner",
+        "suitcase",
+        "paint-palette",
+        "key",
+        "plug",
+        "apartment",
+        "world-globe",
+        "github-mark",
+        "heart",
+        "blood-drop",
+        "heart-rate",
+        "shield",
+        "people-group",
+        "exclamation-mark",
+        "chat-bubble",
+        "phone",
     ];
 
     pub fn ids() -> &'static [&'static str] {
@@ -151,11 +189,33 @@ impl ArtworkCatalogue {
         background: Background,
         sim_resolution: Option<u32>,
     ) -> Option<Scene> {
-        let resolution = sim_resolution
-            .map(|res| SimResolution(res.clamp(SimResolution::MIN, SimResolution::MAX)));
-        let style = Style::new(seed, intensity, detail)
-            .on(background)
-            .with_resolution(resolution);
+        let mut scene = Self::by_id_for_unchoreographed(
+            id,
+            seed,
+            palette,
+            intensity,
+            detail,
+            background,
+            sim_resolution,
+        )?;
+        let style = style_for(seed, intensity, detail, background, sim_resolution);
+        choreograph_scene(&mut scene, &style.choreography());
+        Some(scene)
+    }
+
+    /// [`by_id_for`] with the choreography left off, so a caller can apply its
+    /// own timing (see [`choreograph_scene_with`]) instead of the detail's
+    /// defaults. `sim_resolution` is as [`Self::by_id_for_with_resolution`].
+    pub fn by_id_for_unchoreographed(
+        id: &str,
+        seed: Seed,
+        palette: &Palette,
+        intensity: f32,
+        detail: DetailLevel,
+        background: Background,
+        sim_resolution: Option<u32>,
+    ) -> Option<Scene> {
+        let style = style_for(seed, intensity, detail, background, sim_resolution);
         let scene = match id {
             "crescent-moon" => icons::crescent_moon(&style, palette),
             "alarm-bell" => icons::alarm_bell(&style, palette),
@@ -172,6 +232,29 @@ impl ArtworkCatalogue {
             "selection-edge" => accents::selection_edge(&style, palette),
             "confirmation-background" => accents::confirmation_background(&style, palette),
             "header-motif" => accents::header_motif(&style, palette),
+            "calendar" => icons_time::calendar(&style, palette),
+            "clock" => icons_time::clock(&style, palette),
+            "stopwatch" => icons_time::stopwatch(&style, palette),
+            "sunrise" => icons_time::sunrise(&style, palette),
+            "footprints" => icons_time::footprints(&style, palette),
+            "apple" => icons_objects::apple(&style, palette),
+            "pizza-slice" => icons_objects::pizza_slice(&style, palette),
+            "spanner" => icons_objects::spanner(&style, palette),
+            "suitcase" => icons_objects::suitcase(&style, palette),
+            "paint-palette" => icons_objects::paint_palette(&style, palette),
+            "key" => icons_places::key(&style, palette),
+            "plug" => icons_places::plug(&style, palette),
+            "apartment" => icons_places::apartment(&style, palette),
+            "world-globe" => icons_places::world_globe(&style, palette),
+            "github-mark" => icons_places::github_mark(&style, palette),
+            "heart" => icons_vitals::heart(&style, palette),
+            "blood-drop" => icons_vitals::blood_drop(&style, palette),
+            "heart-rate" => icons_vitals::heart_rate(&style, palette),
+            "shield" => icons_vitals::shield(&style, palette),
+            "people-group" => icons_vitals::people_group(&style, palette),
+            "exclamation-mark" => icons_places::exclamation_mark(&style, palette),
+            "chat-bubble" => icons_places::chat_bubble(&style, palette),
+            "phone" => icons_places::phone(&style, palette),
             _ => return None,
         };
         Some(scene)
@@ -206,13 +289,18 @@ impl ArtworkCatalogue {
 
 /// `crescent-moon` at the designed intensity and full detail.
 pub fn crescent_moon(seed: Seed, palette: Palette) -> Scene {
-    icons::crescent_moon(
-        &Style::new(seed, DEFAULT_INTENSITY, DetailLevel::Large),
-        &palette,
-    )
+    let style = Style::new(seed, DEFAULT_INTENSITY, DetailLevel::Large);
+    let mut scene = icons::crescent_moon(&style, &palette);
+    choreograph_scene(&mut scene, &style.choreography());
+    scene
 }
 
 pub const DEFAULT_INTENSITY: f32 = 0.7;
+
+/// Ticks of a reveal spent settling, for a caller that wants a fixed tail
+/// rather than the catalogue's own (which settles from the last stroke on,
+/// so the whole tail is the sheet setting into the page).
+pub const SETTLE_TICK_FRACTION: f32 = 0.45;
 
 /// Per-build knobs every artwork reads its amounts through.
 #[derive(Debug, Clone, Copy)]
@@ -308,6 +396,13 @@ impl Style {
             .unwrap_or(SimResolution(self.detail.sim_resolution()))
     }
 
+    /// The choreography a reveal for this detail level is drawn with. All the
+    /// timing fields are window-relative shares or per-window sizes, so the
+    /// detail level's tick scale changes nothing.
+    pub fn choreography(&self) -> Choreography {
+        Choreography::default()
+    }
+
     pub fn scene(
         &self,
         id: &str,
@@ -327,6 +422,22 @@ impl Style {
             background: self.background,
         }
     }
+}
+
+/// A [`Style`] for the catalogue arguments, shared by the scene constructors
+/// and the choreography call so both see the same detail and resolution.
+pub(crate) fn style_for(
+    seed: Seed,
+    intensity: f32,
+    detail: DetailLevel,
+    background: Background,
+    sim_resolution: Option<u32>,
+) -> Style {
+    let resolution =
+        sim_resolution.map(|res| SimResolution(res.clamp(SimResolution::MIN, SimResolution::MAX)));
+    Style::new(seed, intensity, detail)
+        .on(background)
+        .with_resolution(resolution)
 }
 
 /// Timeline builder with explicit phases. `Reveal` handles one mask and one
@@ -365,8 +476,38 @@ impl Painting {
 
     /// Starts a wet-on-dry phase: everything so far is settled and the
     /// evaporation rate returns to base.
+    ///
+    /// `DryAll` is instant, which costs the reveal its tail: every pigment
+    /// still in suspension is deposited on that one tick, so an artwork that
+    /// glazes has nothing left to settle afterwards and holds a finished frame
+    /// for the rest of its run. Prefer [`Painting::glaze`] unless the next
+    /// mark really must land on a bone-dry sheet.
     pub fn dry(&mut self, f: f32) -> &mut Self {
         self.at(f, Operation::DryAll);
+        self.at(f, Operation::Dry { rate: 1.0 })
+    }
+
+    /// A glaze boundary that dries over a window rather than in one tick:
+    /// the wash below is taken down by `Operation::Settle`, which removes a
+    /// share of the film each tick, so its pigment deposits gradually and
+    /// keeps working through the tail. Returns to the base rate at the end of
+    /// the window, by which point the sheet is dry enough to take a crisp
+    /// wet-on-dry mark.
+    ///
+    /// The sheet is dry *at* `f`, having been taken down over the `over`
+    /// before it, so a mark laid at `f` still lands wet-on-dry. `over` is a
+    /// share of the whole timeline; a tenth is enough for the deepest film
+    /// the simulation allows.
+    pub fn glaze(&mut self, f: f32, over: f32) -> &mut Self {
+        let window = ((over.clamp(0.01, 1.0) * self.total as f32).round() as u32).max(2);
+        let span = window as f32 / self.total as f32;
+        self.at(
+            (f - span).max(0.0),
+            Operation::Settle {
+                share: settle_share_for_ticks(window),
+            },
+        );
+        self.at(f, Operation::Settle { share: 0.0 });
         self.at(f, Operation::Dry { rate: 1.0 })
     }
 
@@ -378,6 +519,129 @@ impl Painting {
         self.timeline.push(self.total, Operation::DryAll);
         self.timeline
     }
+}
+
+/// A closed outline in design space: the silhouette an icon is recognised by.
+///
+/// Icons in this catalogue are stencil-and-fill drawings. The `SetMask` built
+/// from this outline is what carries the shape; the pigment behind it only has
+/// to arrive everywhere inside. Keeping the outline in design space (`y` over
+/// `0..1`, `x` over `0..aspect`) lets [`Shape::bounds`] size the hatch that
+/// fills it without the caller doing the arithmetic twice.
+#[derive(Debug, Clone)]
+struct Shape(Vec<(f32, f32)>);
+
+impl Shape {
+    /// A closed polygon sampled from a parametric edge, `t` running `0..1`.
+    fn sampled(samples: usize, edge: impl Fn(f32) -> (f32, f32)) -> Shape {
+        Shape(
+            (0..samples.max(3))
+                .map(|i| edge(i as f32 / samples.max(3) as f32))
+                .collect(),
+        )
+    }
+
+    fn circle(cx: f32, cy: f32, r: f32, samples: usize) -> Shape {
+        Shape::sampled(samples, |t| {
+            let a = t * std::f32::consts::TAU;
+            (cx + r * a.cos(), cy + r * a.sin())
+        })
+    }
+
+    /// A rectangle with its corners rounded by `r`.
+    fn rounded_rect(x0: f32, y0: f32, x1: f32, y1: f32, r: f32) -> Shape {
+        let r = r
+            .min((x1 - x0).abs() * 0.5)
+            .min((y1 - y0).abs() * 0.5)
+            .max(0.0);
+        let corner = |cx: f32, cy: f32, from: f32| {
+            (0..=6).map(move |i| {
+                let a = from + i as f32 / 6.0 * std::f32::consts::FRAC_PI_2;
+                (cx + r * a.cos(), cy + r * a.sin())
+            })
+        };
+        let half_pi = std::f32::consts::FRAC_PI_2;
+        let mut pts: Vec<(f32, f32)> = Vec::with_capacity(28);
+        pts.extend(corner(x1 - r, y0 + r, -half_pi));
+        pts.extend(corner(x1 - r, y1 - r, 0.0));
+        pts.extend(corner(x0 + r, y1 - r, half_pi));
+        pts.extend(corner(x0 + r, y0 + r, 2.0 * half_pi));
+        Shape(pts)
+    }
+
+    /// `(x0, x1, y0, y1)` in design space.
+    fn bounds(&self) -> (f32, f32, f32, f32) {
+        self.0.iter().fold(
+            (f32::MAX, f32::MIN, f32::MAX, f32::MIN),
+            |(x0, x1, y0, y1), (x, y)| (x0.min(*x), x1.max(*x), y0.min(*y), y1.max(*y)),
+        )
+    }
+
+    fn polygon(&self, frame: &Frame) -> Vec<Point> {
+        self.0.iter().map(|(x, y)| frame.pt(*x, *y)).collect()
+    }
+}
+
+/// Rows a stencilled body is hatched with at each detail level. Enough that
+/// the row pitch is well under the narrowest part of any icon silhouette, and
+/// fewer at `Small` where there are fewer ticks to spend.
+fn hatch_rows(style: &Style, band: f32) -> usize {
+    let target = if style.fine() { 0.085 } else { 0.13 };
+    ((band / target).round() as usize).clamp(5, 11)
+}
+
+/// Lays an icon body inside its own stencil, the way a flat wash is laid.
+///
+/// One wide stamp would deliver the pigment on the reveal's first step and
+/// there would be nothing to watch arrive, and a narrower brush would leave
+/// the stencil unfilled and the object unrecognisable. So the footprint is
+/// pre-wet in a single pass — water alone leaves no mark — and the pigment is
+/// hatched across it in overlapping sweeps, which is both how a wash is
+/// actually laid and a path long enough for the pen to pace along. The turns
+/// sit outside the mask and are clipped away.
+///
+/// Leaves the mask set: the caller adds marks that should be clipped to the
+/// silhouette, then `dry` and `clear_mask` before anything that should not.
+#[allow(clippy::too_many_arguments)]
+fn stencil_body(
+    p: &mut Painting,
+    frame: &Frame,
+    style: &Style,
+    shape: &Shape,
+    feather: f32,
+    pigment: usize,
+    conc: f32,
+    at: f32,
+) {
+    let (x0, x1, y0, y1) = shape.bounds();
+    let rows = hatch_rows(style, y1 - y0);
+    let pitch = (y1 - y0) / (rows.max(2) - 1) as f32;
+    // Inset the first and last row by half a pitch so the hatch's own soft
+    // edge lands inside the stencil rather than being clipped in half.
+    let (top, bottom) = (y0 + pitch * 0.25, y1 - pitch * 0.25);
+    let (cx, cy) = ((x0 + x1) * 0.5, (y0 + y1) * 0.5);
+    let reach = ((x1 - x0).max(y1 - y0)) * 0.55;
+    p.mask(at, shape.polygon(frame), feather);
+    p.at(
+        at,
+        water(
+            frame.line(cx, cy - reach * 0.2, cx, cy + reach * 0.2),
+            reach,
+            style.water(0.75),
+            0.15,
+        ),
+    );
+    p.at(
+        at,
+        brush(
+            frame.hatch(x0 - 0.12, x1 + 0.12, top, bottom, rows),
+            frame.hatch_radius(top, bottom, rows),
+            pigment,
+            style.conc(conc),
+            style.water(0.42),
+            0.75,
+        ),
+    );
 }
 
 pub(crate) fn role(palette: &Palette, role: PigmentRole) -> usize {
@@ -413,6 +677,7 @@ pub(crate) fn brush(
         concentration,
         water,
         softness,
+        span: StrokeSpan::FULL,
     })
 }
 
@@ -434,6 +699,7 @@ pub(crate) fn tapered(
         concentration,
         water,
         softness,
+        span: StrokeSpan::FULL,
     })
 }
 
@@ -444,6 +710,7 @@ pub(crate) fn lift(path: Vec<Point>, radius: f32, strength: f32, softness: f32) 
         radius: RadiusProfile::uniform(radius),
         strength,
         softness,
+        span: StrokeSpan::FULL,
     })
 }
 
@@ -453,7 +720,30 @@ pub(crate) fn water(path: Vec<Point>, radius: f32, amount: f32, softness: f32) -
         radius: RadiusProfile::uniform(radius),
         water: amount,
         softness,
+        span: StrokeSpan::FULL,
     })
+}
+
+/// Rewrites a built scene's timeline so its strokes are drawn (see
+/// [`choreograph`]), settling over the given fraction of the ticks. A
+/// `settle_fraction` of zero settles from the last stroke instead, which is
+/// what [`choreograph_scene`] does; the fraction is for callers measuring or
+/// tuning the reveal against a fixed tail.
+pub fn choreograph_scene_with(scene: &mut Scene, params: &Choreography, settle_fraction: f32) {
+    scene.timeline = choreograph(&scene.timeline, params);
+    if settle_fraction > 0.0 {
+        apply_settle_fraction(&mut scene.timeline, settle_fraction);
+    } else {
+        settle_after_last_stroke(&mut scene.timeline);
+    }
+}
+
+/// Rewrites a built scene's timeline so its strokes are drawn (see
+/// [`choreograph`]) and settles from the last stroke on
+/// (`settle_after_last_stroke`). Every scene-producing entry point runs this
+/// on the finished scene just before it is returned.
+pub(crate) fn choreograph_scene(scene: &mut Scene, params: &Choreography) {
+    choreograph_scene_with(scene, params, 0.0);
 }
 
 pub(crate) const SQUARE: SizeHint = SizeHint {
@@ -515,6 +805,27 @@ mod tests {
         assert!(mask.iter().any(|p| dist(*p, c.centre) > c.radius + 0.08));
         for p in c.concave_edge(0.3, 7) {
             assert!(dist(p, c.inner_centre) >= c.inner_radius - 1e-4);
+        }
+    }
+
+    #[test]
+    fn every_catalogue_id_validates_after_choreography_for_every_detail_and_ground() {
+        let palette = Palette::moonlight();
+        for id in ArtworkCatalogue::ids() {
+            for detail in DetailLevel::ALL {
+                for background in [Background::Transparent, Background::TransparentOnDark] {
+                    let scene =
+                        ArtworkCatalogue::by_id_for(id, Seed(7), &palette, 0.7, detail, background)
+                            .unwrap_or_else(|| {
+                                panic!("{id} / {detail:?} / {background:?} missing")
+                            });
+                    assert_eq!(
+                        scene.validate(),
+                        Ok(()),
+                        "{id} / {detail:?} / {background:?}"
+                    );
+                }
+            }
         }
     }
 }

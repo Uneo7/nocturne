@@ -14,9 +14,75 @@ export type ArtworkId =
   | 'tab-underline'
   | 'selection-edge'
   | 'confirmation-background'
-  | 'header-motif';
+  | 'header-motif'
+  | 'calendar'
+  | 'clock'
+  | 'stopwatch'
+  | 'sunrise'
+  | 'footprints'
+  | 'apple'
+  | 'pizza-slice'
+  | 'spanner'
+  | 'suitcase'
+  | 'paint-palette'
+  | 'key'
+  | 'plug'
+  | 'apartment'
+  | 'world-globe'
+  | 'github-mark'
+  | 'heart'
+  | 'blood-drop'
+  | 'heart-rate'
+  | 'shield'
+  | 'people-group'
+  | 'exclamation-mark'
+  | 'chat-bubble'
+  | 'phone';
 
 export type PaletteId = 'moonlight' | 'water' | 'dusk' | 'ember' | 'moss' | 'slate';
+
+/**
+ * A Lucide icon element, shaped to match the vanilla `lucide` package's
+ * `IconNode`: a `[tag, attrs]` pair in a 24x24 stroke-drawn icon. The host
+ * app's `IconNode` (e.g. `import { Clock } from 'lucide'`) is assignable to
+ * `IconNode[]` here, so no import from the peer is needed for the type.
+ */
+export type IconNode = readonly [tag: string, attrs: Record<string, string | number | undefined>];
+
+/** The palette roles a scene's pigments can take, as the Rust `PigmentRole`. */
+export type PigmentRole = 'base_wash' | 'shadow' | 'accent' | 'glow';
+
+/**
+ * Per-icon tuning layered over the generic closed-subpath/open-subpath
+ * mapping, keyed by Lucide name. Every field is optional; an absent one keeps
+ * the library default. Serialised camelCase straight onto the `iconScene`
+ * wire.
+ */
+export interface IconHints {
+  /** Indices of open subpaths to close and paint as bodies (flattened order). */
+  fill?: number[];
+  /** Multiplier on the Lucide stroke half-width for marks. 1.0 = as drawn. */
+  markRadius?: number;
+  /** Marks kept at `DetailLevel.Small` (longest first). */
+  smallMarks?: number;
+  /** Circles lifted out of the wet body before it glazes, in 24-grid units: `[cx, cy, r]`. */
+  holes?: [number, number, number][];
+  bodyRole?: PigmentRole;
+  markRole?: PigmentRole;
+}
+
+/**
+ * An icon source for `Artwork`: the element list plus a name that becomes the
+ * scene id (`lucide-<name>-<palette>-<seed>`). The host app supplies the
+ * element list from `lucide` (e.g. `import { Clock } from 'lucide'`), whose
+ * `IconNode` type matches this structurally. `hints` overrides the library's
+ * built-in tuning per field.
+ */
+export interface IconArtworkSource {
+  icon: IconNode[];
+  name: string;
+  hints?: IconHints;
+}
 
 export type ArtworkMode = 'auto' | 'live' | 'baked' | 'static';
 export type ArtworkMotion = 'auto' | 'reduced' | 'full';
@@ -46,12 +112,15 @@ export interface ArtworkOptions {
   seed?: number;
   /** 0..1, default 0.7: scales pigment concentration. */
   intensity?: number;
-  /** Wall-clock length of the reveal, default 600. */
+  /** Wall-clock length of the whole reveal, default 3000. */
   durationMs?: number;
   /**
-   * 0..1, default 0.3: the final share of the reveal spent settling and
-   * drying. Live reveals lengthen the scene's settle phase; baked reveals
-   * hold the finished frame for the tail.
+   * 0..1, default 0.8: the share of the wall clock spent setting into the
+   * page, after the brushwork finishes. `tail = 0.8` of a 3000 ms reveal
+   * means 600 ms of brushwork then 2400 ms of settling. It used to mean a
+   * share of simulation ticks, and for baked reveals a hold on the finished
+   * frame; both are gone — the settle phase is now baked at wall-clock
+   * spacing.
    */
   tail?: number;
   /**
@@ -83,13 +152,36 @@ export const ARTWORK_IDS: readonly ArtworkId[] = [
   'selection-edge',
   'confirmation-background',
   'header-motif',
+  'calendar',
+  'clock',
+  'stopwatch',
+  'sunrise',
+  'footprints',
+  'apple',
+  'pizza-slice',
+  'spanner',
+  'suitcase',
+  'paint-palette',
+  'key',
+  'plug',
+  'apartment',
+  'world-globe',
+  'github-mark',
+  'heart',
+  'blood-drop',
+  'heart-rate',
+  'shield',
+  'people-group',
+  'exclamation-mark',
+  'chat-bubble',
+  'phone',
 ];
 
 export const PALETTE_IDS: readonly PaletteId[] = ['moonlight', 'water', 'dusk', 'ember', 'moss', 'slate'];
 
 export const DEFAULT_INTENSITY = 0.7;
-export const DEFAULT_DURATION_MS = 600;
-export const DEFAULT_TAIL = 0.3;
+export const DEFAULT_DURATION_MS = 3000;
+export const DEFAULT_TAIL = 0.8;
 
 /**
  * The natural width/height ratio of each catalogue artwork, from the baked
@@ -114,6 +206,29 @@ export const ARTWORK_ASPECT: Readonly<Record<ArtworkId, number>> = {
   'selection-edge': 1 / 6,
   'confirmation-background': 3,
   'header-motif': 5,
+  'calendar': 1,
+  'clock': 1,
+  'stopwatch': 1,
+  'sunrise': 1,
+  'footprints': 1,
+  'apple': 1,
+  'pizza-slice': 1,
+  'spanner': 1,
+  'suitcase': 1,
+  'paint-palette': 1,
+  'key': 1,
+  'plug': 1,
+  'apartment': 1,
+  'world-globe': 1,
+  'github-mark': 1,
+  'heart': 1,
+  'blood-drop': 1,
+  'heart-rate': 1,
+  'shield': 1,
+  'people-group': 1,
+  'exclamation-mark': 1,
+  'chat-bubble': 1,
+  'phone': 1,
 };
 
 export function artworkAspect(id: ArtworkId): number {
@@ -134,13 +249,27 @@ export function detailForEdge(edgePx: number): DetailLevel {
 }
 
 /**
+ * Largest simulation grid a live reveal will run on, whatever the display.
+ *
+ * A tick is the expensive thing in a frame and its cost is roughly the cell
+ * count: measured on a discrete laptop GPU, a 512 grid costs 0.9-1.9 ms a
+ * tick against 0.35-1.06 ms at 256, and an integrated GPU is several times
+ * slower again. The render reconstructs the simulation fields at the output
+ * resolution with a cubic B-spline, so a larger canvas still gets a sharp
+ * frame off a 256 grid — it is the fluid detail that is capped, not the
+ * picture. Anything that genuinely wants a 512 grid wants a baked strip.
+ */
+export const MAX_LIVE_SIM_RESOLUTION = 256;
+
+/**
  * Simulation grid side for a live reveal at a backing long edge: the edge
- * rounded up to a multiple of 32, capped at `SimResolution.MAX` (512) and
- * floored at `SimResolution.MIN` (64). The engine clamps again defensively.
+ * rounded up to a multiple of 32, floored at `SimResolution.MIN` (64) and
+ * capped at {@link MAX_LIVE_SIM_RESOLUTION}. The engine clamps again
+ * defensively.
  */
 export function simResolutionForEdge(edgePx: number): number {
   const edge = Math.max(0, Math.round(edgePx));
-  if (edge >= 512) return 512;
+  if (edge >= MAX_LIVE_SIM_RESOLUTION) return MAX_LIVE_SIM_RESOLUTION;
   return Math.max(64, Math.ceil(edge / 32) * 32);
 }
 

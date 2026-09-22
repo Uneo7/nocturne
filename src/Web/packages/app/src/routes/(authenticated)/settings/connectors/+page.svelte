@@ -28,13 +28,13 @@
     RefreshCw,
     AlertCircle,
     Wifi,
-    WifiOff,
     Sparkles,
     Database,
     Copy,
     Check,
     KeyRound,
   } from "lucide-svelte";
+  import { Artwork } from "@nocturne/watercolour";
   import SettingsPageSkeleton from "$lib/components/settings/SettingsPageSkeleton.svelte";
   import DataSourceRow from "$lib/components/settings/DataSourceRow.svelte";
   import type { DataSourceStatus } from "$lib/components/settings/DataSourceRow.svelte";
@@ -434,7 +434,13 @@
       <CardContent>
         {#if !servicesOverview.activeDataSources || servicesOverview.activeDataSources.length === 0}
           <div class="text-center py-8 text-muted-foreground">
-            <WifiOff class="h-12 w-12 mx-auto mb-4 opacity-50" />
+            <Artwork
+              artwork="plug"
+              palette="slate"
+              motion="auto"
+              autoplay="once"
+              class="mx-auto mb-4 size-48"
+            />
             <p class="font-medium">No data sources detected</p>
             <p class="text-sm">
               Set up an uploader app to start sending data to Nocturne

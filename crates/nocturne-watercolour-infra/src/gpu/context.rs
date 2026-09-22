@@ -1,9 +1,15 @@
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use nocturne_watercolour_core::application::EngineError;
 
 use super::surface::PresentSurface;
+
+/// Longest a blocking wait on the device may take before it is reported as
+/// a hang. Without it a wedged driver stalls the process for good; with it
+/// the caller gets an error and the host can fall back.
+pub const GPU_WAIT_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// One instance/adapter/device/queue set, shared by every engine and every
 /// presentation surface created from it.
@@ -18,9 +24,15 @@ struct Inner {
     device: wgpu::Device,
     queue: wgpu::Queue,
     info: wgpu::AdapterInfo,
+    limits: wgpu::Limits,
     /// Separate from `Inner` so the loss callback, which wgpu requires to be
     /// `Send`, captures only this and not the (non-`Send` on wasm) device.
     lost: Arc<AtomicBool>,
+    /// The first uncaptured device error. wgpu's default handler panics,
+    /// which aborts a native host and leaves the wasm module unusable;
+    /// recording it instead turns the fault into an `EngineError` on the
+    /// next call, so the host can dispose and fall back.
+    fault: Arc<Mutex<Option<String>>>,
 }
 
 impl GpuContext {
@@ -59,11 +71,20 @@ impl GpuContext {
             })
             .await
             .map_err(|e| EngineError::new(format!("request_device: {e}")))?;
+        let limits = device.limits();
         let lost = Arc::new(AtomicBool::new(false));
         let flag = Arc::clone(&lost);
         device.set_device_lost_callback(move |_reason, _message| {
             flag.store(true, Ordering::Release);
         });
+        let fault = Arc::new(Mutex::new(None));
+        let sink = Arc::clone(&fault);
+        device.on_uncaptured_error(Arc::new(move |error: wgpu::Error| {
+            let mut slot = sink.lock().unwrap_or_else(|p| p.into_inner());
+            if slot.is_none() {
+                *slot = Some(error.to_string());
+            }
+        }));
         // wgpu's handles are `!Send` on wasm; one `Arc` keeps a single code
         // path for both targets and costs an unused atomic there.
         #[allow(clippy::arc_with_non_send_sync)]
@@ -73,7 +94,9 @@ impl GpuContext {
             device,
             queue,
             info,
+            limits,
             lost,
+            fault,
         });
         Ok(Some(GpuContext { inner }))
     }
@@ -99,6 +122,12 @@ impl GpuContext {
         &self.inner.adapter
     }
 
+    /// The limits the device was created with; every allocation is checked
+    /// against them before it reaches the driver.
+    pub fn limits(&self) -> &wgpu::Limits {
+        &self.inner.limits
+    }
+
     pub fn adapter_name(&self) -> &str {
         &self.inner.info.name
     }
@@ -111,6 +140,29 @@ impl GpuContext {
     /// submission is silently dropped, so hosts should stop and fall back.
     pub fn is_lost(&self) -> bool {
         self.inner.lost.load(Ordering::Acquire)
+    }
+
+    /// The first device error reported since creation, if any. A faulted
+    /// device is unusable for the instance that faulted it; see `check`.
+    pub fn fault(&self) -> Option<String> {
+        self.inner
+            .fault
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone()
+    }
+
+    /// `Err` once the device is lost or has reported an error. Every
+    /// submission path calls this first, so a faulted device is never driven
+    /// further.
+    pub fn check(&self) -> Result<(), EngineError> {
+        if self.is_lost() {
+            return Err(EngineError::new("device lost"));
+        }
+        if let Some(fault) = self.fault() {
+            return Err(EngineError::new(format!("device error: {fault}")));
+        }
+        Ok(())
     }
 
     /// Replaces the loss flag's callback with one that also runs `callback`.
@@ -126,14 +178,28 @@ impl GpuContext {
             });
     }
 
-    /// Blocks until all submitted work has completed. A no-op on WebGPU,
-    /// where the browser polls the device.
+    /// Blocks until all submitted work has completed, or `GPU_WAIT_TIMEOUT`
+    /// passes. A no-op on WebGPU, where the browser polls the device.
     pub fn wait_idle(&self) -> Result<(), EngineError> {
+        self.wait(None)
+    }
+
+    /// Blocks until the given submission has completed.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn wait_for(&self, index: wgpu::SubmissionIndex) -> Result<(), EngineError> {
+        self.wait(Some(index))
+    }
+
+    fn wait(&self, submission_index: Option<wgpu::SubmissionIndex>) -> Result<(), EngineError> {
         self.inner
             .device
-            .poll(wgpu::PollType::wait_indefinitely())
+            .poll(wgpu::PollType::Wait {
+                submission_index,
+                timeout: Some(GPU_WAIT_TIMEOUT),
+            })
             .map(|_| ())
-            .map_err(|e| EngineError::new(format!("device poll: {e:?}")))
+            .map_err(|e| EngineError::new(format!("device poll: {e:?}")))?;
+        self.check()
     }
 
     #[cfg(target_arch = "wasm32")]

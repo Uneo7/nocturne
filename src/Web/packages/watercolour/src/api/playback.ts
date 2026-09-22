@@ -1,12 +1,12 @@
 import type { ArtworkOptions, DetailLevel, Surface } from '../types';
 import { DEFAULT_DURATION_MS, DEFAULT_TAIL, detailForEdge, simResolutionForEdge } from '../types';
-import { type AssetOptions, assetAvailable, assetUrl, loadManifest } from './assets';
-import { type BakedManifest, type StripBitmap, drawStill, drawStripFrame, loadStill, loadStrip, parseBakedManifest } from './baked';
+import { type AssetKey, type AssetOptions, assetAvailable, assetUrl, iconAssetKey, loadManifest } from './assets';
+import { bakedServesEdge, type BakedManifest, type StripBitmap, drawStill, drawStripFrame, loadStrip, parseBakedManifest, sharedStill } from './baked';
 import { type Capabilities, detectCapabilities } from './capabilities';
 import { type EngineHost, type EngineLease, type WasmInstance, getEngineHost } from './engine-host';
 import { WatercolourError, toWatercolourError } from './errors';
 import { type ResolvedMode, fallbackOrder, resolveMode, resolveMotion } from './mode';
-import { type ArtworkRef, type SceneSource, isArtworkRef, parseSceneDocument, resolveSceneJson } from './scenes';
+import { type ArtworkRef, type IconRef, type SceneSource, iconSvg, isArtworkRef, isIconRef, parseSceneDocument, resolveSceneJson } from './scenes';
 import { type Scheduler, type SchedulerHandle, getScheduler } from './scheduler';
 
 export type PlayerEvent = 'ready' | 'finished' | 'fallback' | 'error' | 'statechange';
@@ -206,14 +206,17 @@ class LiveBackend implements Backend {
       // a 450+ px store. An explicit `detail`/`simResolution` option wins.
       const longEdge = Math.max(size.width, size.height);
       const resolvedDetail = options.detail ?? detailForEdge(longEdge);
-      const sceneJson = isArtworkRef(source)
+      const sceneJson = isArtworkRef(source) || isIconRef(source)
         ? resolveSceneJson(lease.module, source, {
             detail: resolvedDetail,
             simResolution: options.simResolution ?? simResolutionForEdge(longEdge),
           })
         : source.sceneJson;
       parseSceneDocument(sceneJson);
-      const instance = lease.engine.createInstance(sceneJson, durationMs, options.tail ?? DEFAULT_TAIL);
+      // Catalogue scenes carry their own tick tail; only the wall-clock split
+      // is passed through, so `tail` is the share of the duration the paint
+      // phase does NOT get.
+      const instance = lease.engine.createInstance(sceneJson, durationMs, 0, 1 - (options.tail ?? DEFAULT_TAIL));
       if (options.easing) instance.setProgressCurve('linear');
       try {
         const target = acquireWebgpu(canvas);
@@ -472,7 +475,6 @@ class BakedBackend implements Backend {
   private readonly handle: SchedulerHandle;
   private disposed = false;
   private readonly easing?: (t: number) => number;
-  private readonly tail: number;
   private readonly durationMs: number;
 
   static async create(
@@ -487,7 +489,7 @@ class BakedBackend implements Backend {
     const manifest = await loadManifest(urls.manifest);
     const strip = await loadStrip(urls.strip, manifest);
     const target = acquire2d(canvas);
-    return new BakedBackend(target.canvas, target.ctx, strip, durationMs, size, scheduler, callbacks, options.easing, options.tail ?? DEFAULT_TAIL);
+    return new BakedBackend(target.canvas, target.ctx, strip, durationMs, size, scheduler, callbacks, options.easing);
   }
 
   private constructor(
@@ -499,11 +501,9 @@ class BakedBackend implements Backend {
     scheduler: Scheduler,
     private readonly callbacks: BackendCallbacks,
     easing: ((t: number) => number) | undefined,
-    tail: number,
   ) {
     this.durationMs = durationMs;
     this.easing = easing;
-    this.tail = tail;
     this.size = size;
     this.applySize();
     this.handle = scheduler.register({
@@ -522,7 +522,7 @@ class BakedBackend implements Backend {
     return Math.min(1, this.elapsedMs / this.durationMs);
   }
 
-  /** The eased, tail-held value actually drawn from the strip. */
+  /** The eased value actually drawn from the strip; strips are baked at wall-clock spacing, so no tail-hold. */
   get easedProgress(): number {
     return this.frameProgress();
   }
@@ -590,11 +590,10 @@ class BakedBackend implements Backend {
     this.dirty = true;
   }
 
-  /** Progress fed to the strip: eased, and held on the finished frame for the tail. */
+  /** Progress fed to the strip: eased, linear over the wall clock. */
   private frameProgress(): number {
     const t = Math.min(1, this.elapsedMs / this.durationMs);
-    const tailed = t <= 1 - this.tail ? t : 1;
-    return this.easing ? this.easing(tailed) : tailed;
+    return this.easing ? this.easing(t) : t;
   }
 
   private render(): void {
@@ -620,7 +619,7 @@ class StaticBackend implements Backend {
   private disposed = false;
 
   static async create(canvas: HTMLCanvasElement, url: string, size: PixelSize, callbacks: BackendCallbacks): Promise<StaticBackend> {
-    const image = await loadStill(url);
+    const image = await sharedStill(url);
     const target = acquire2d(canvas);
     const backend = new StaticBackend(target.canvas, target.ctx, image, size);
     queueMicrotask(() => callbacks.onFinished());
@@ -650,7 +649,7 @@ class StaticBackend implements Backend {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
-    this.image.close();
+    // The bitmap is borrowed from `sharedStill` and outlives this backend.
   }
 
   private draw(): void {
@@ -659,6 +658,85 @@ class StaticBackend implements Backend {
     this.canvas.height = this.size.height;
     drawStill(this.ctx, this.image, this.size.width, this.size.height);
   }
+}
+
+/**
+ * The plain-Lucide-SVG fallback for icon sources: draws the element list as
+ * an inline SVG image when no GPU is available. It always resolves, so an
+ * icon never falls to `none`.
+ */
+class IconSvgBackend implements Backend {
+  readonly mode = 'static' as const;
+  readonly playing = false;
+  readonly finished = true;
+  readonly progress = 1;
+  readonly easedProgress = 1;
+  private disposed = false;
+
+  static async create(
+    canvas: HTMLCanvasElement,
+    ref: IconRef,
+    size: PixelSize,
+    callbacks: BackendCallbacks,
+  ): Promise<IconSvgBackend> {
+    const target = acquire2d(canvas);
+    const backend = new IconSvgBackend(target.canvas, target.ctx, ref, size);
+    await backend.draw();
+    if (!backend.disposed) queueMicrotask(() => callbacks.onFinished());
+    return backend;
+  }
+
+  private constructor(
+    readonly canvas: HTMLCanvasElement,
+    private readonly ctx: CanvasRenderingContext2D,
+    private readonly ref: IconRef,
+    private size: PixelSize,
+  ) {}
+
+  play(): void {}
+  pause(): void {}
+  reset(): void {}
+  seek(): void {}
+  finish(): void {}
+
+  resize(size: PixelSize): void {
+    this.size = size;
+    void this.draw();
+  }
+
+  dispose(): void {
+    this.disposed = true;
+  }
+
+  private async draw(): Promise<void> {
+    if (this.disposed) return;
+    this.canvas.width = this.size.width;
+    this.canvas.height = this.size.height;
+    const url = URL.createObjectURL(
+      new Blob([iconSvg(this.ref.icon, this.ref.surface ?? 'light')], { type: 'image/svg+xml;charset=utf-8' }),
+    );
+    try {
+      const img = new Image();
+      await new Promise<void>((resolve, reject) => {
+        img.onload = () => resolve();
+        img.onerror = () => reject(new WatercolourError('Engine', 'icon SVG decode failed'));
+        img.src = url;
+      });
+      if (this.disposed) return;
+      this.ctx.drawImage(img, 0, 0, this.size.width, this.size.height);
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+  }
+}
+
+/**
+ * The static rung an icon source draws: its baked final when one exists, else
+ * the plain-SVG fallback, which always resolves so an icon never falls to
+ * `none`. Exported so the two paths are unit-testable without a canvas.
+ */
+export function iconStaticBackend(icon: IconRef | undefined, hasFinal: boolean): 'baked' | 'svg' {
+  return icon && !hasFinal ? 'svg' : 'baked';
 }
 
 type Listener = (payload?: unknown) => void;
@@ -678,6 +756,7 @@ class Player implements ArtworkPlayer {
   private readonly scheduler: Scheduler;
   private readonly source: SceneSource;
   private readonly ref: ArtworkRef | undefined;
+  private readonly icon: IconRef | undefined;
   readonly ready: Promise<void>;
 
   constructor(
@@ -688,6 +767,7 @@ class Player implements ArtworkPlayer {
     this.currentCanvas = canvas;
     this.source = typeof source === 'string' ? { sceneJson: source } : source;
     this.ref = isArtworkRef(this.source) ? this.source : undefined;
+    this.icon = isIconRef(this.source) ? this.source : undefined;
     this.durationMs = options.durationMs && options.durationMs > 0 ? options.durationMs : DEFAULT_DURATION_MS;
     this.host = options.engineHost ?? getEngineHost();
     this.scheduler = options.scheduler ?? getScheduler();
@@ -792,8 +872,11 @@ class Player implements ArtworkPlayer {
     const capabilities = await (this.options.capabilities ?? detectCapabilities)();
     if (this.disposed) return;
     this.motion = resolveMotion(this.options.motion ?? 'auto', capabilities.reducedMotion);
-    const hasBaked = this.assetOk('strip') && this.assetOk('manifest');
-    const hasStatic = this.assetOk('final');
+    // A baked icon source resolves to its `lucide-<name>` set like any
+    // artwork; an unbaked one has no assets, so its plain-SVG fallback is the
+    // guaranteed last rung below `live`.
+    const hasBaked = this.bakedServesSize() && this.assetOk('strip') && this.assetOk('manifest');
+    const hasStatic = this.icon ? true : this.assetOk('final');
     const first = resolveMode({
       requested: this.options.mode ?? 'auto',
       motion: this.options.motion ?? 'auto',
@@ -821,7 +904,7 @@ class Player implements ArtworkPlayer {
         this.fallbackReason = `live: ${error.code}: ${error.message}`;
         this.emit('fallback', { from: 'live', error } satisfies FallbackDetail);
       }
-      if (import.meta.env.DEV) {
+      if (import.meta.env.DEV && !(this.options.mode !== undefined && this.options.mode !== 'auto' && first === this.options.mode)) {
         const reason = !capabilities.webgpu || !capabilities.adapter
           ? 'no WebGPU adapter'
           : this.host.capReached
@@ -829,14 +912,26 @@ class Player implements ArtworkPlayer {
             : this.motion === 'reduced'
               ? 'reduced motion'
               : 'no assets';
-        console.warn(`[watercolour] ${this.ref?.id ?? 'player'} resolved ${this.options.mode ?? 'auto'} -> ${first} (${reason})`);
+        console.warn(`[watercolour] ${this.assetKey()?.id ?? 'player'} resolved ${this.options.mode ?? 'auto'} -> ${first} (${reason})`);
       }
     }
     await this.start([first, ...fallbackOrder(first, { hasBaked, hasStatic })]);
   }
 
+  private assetKey(): AssetKey | undefined {
+    if (this.ref) return this.ref;
+    if (this.icon) return iconAssetKey(this.icon.name, this.icon.palette, this.icon.surface);
+    return undefined;
+  }
+
+  /** Withholding baked at hero sizes lets `resolveMode` pick static instead. */
+  private bakedServesSize(): boolean {
+    return bakedServesEdge(Math.max(this.size.width, this.size.height));
+  }
+
   private assetOk(variant: 'strip' | 'manifest' | 'final'): boolean {
-    if (this.ref) return assetAvailable(this.ref, variant, this.options);
+    const key = this.assetKey();
+    if (key) return assetAvailable(key, variant, this.options);
     return Boolean(this.options.assets?.[variant]);
   }
 
@@ -862,7 +957,7 @@ class Player implements ArtworkPlayer {
       } catch (error) {
         lastError = toWatercolourError(error);
         this.fallbackReason = `${mode}: ${lastError.code}: ${lastError.message}`;
-        if (import.meta.env.DEV) console.warn(`[watercolour] ${this.ref?.id ?? 'player'} fell back ${mode} -> ${lastError.code}: ${lastError.message}`);
+        if (import.meta.env.DEV) console.warn(`[watercolour] ${this.assetKey()?.id ?? 'player'} fell back ${mode} -> ${lastError.code}: ${lastError.message}`);
         this.emit('fallback', { from: mode, error: lastError } satisfies FallbackDetail);
       }
     }
@@ -902,6 +997,9 @@ class Player implements ArtworkPlayer {
           BakedBackend.create(this.currentCanvas, { manifest, strip }, this.durationMs, this.size, this.scheduler, callbacks, this.options),
         );
       case 'static':
+        if (iconStaticBackend(this.icon, this.assetOk('final')) === 'svg') {
+          return IconSvgBackend.create(this.currentCanvas, this.icon!, this.size, callbacks);
+        }
         return this.resolveUrls(['final']).then(([final]) => StaticBackend.create(this.currentCanvas, final, this.size, callbacks));
       case 'none':
         return Promise.reject(new WatercolourError('AssetMissing', 'no asset available for this artwork'));
@@ -911,8 +1009,9 @@ class Player implements ArtworkPlayer {
   private async resolveUrls<const V extends readonly ('manifest' | 'strip' | 'final')[]>(variants: V): Promise<string[]> {
     return Promise.all(
       variants.map(async (variant) => {
-        const url = this.ref ? await assetUrl(this.ref, variant, this.options) : this.options.assets?.[variant];
-        if (!url) throw new WatercolourError('AssetMissing', `no ${variant} asset for ${this.ref?.id ?? 'scene document'}`);
+        const key = this.assetKey();
+        const url = key ? await assetUrl(key, variant, this.options) : this.options.assets?.[variant];
+        if (!url) throw new WatercolourError('AssetMissing', `no ${variant} asset for ${key?.id ?? 'scene document'}`);
         return url;
       }),
     );

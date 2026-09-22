@@ -1,5 +1,7 @@
 <script lang="ts">
-    import { Heart, ArrowUpRight } from "@lucide/svelte";
+    import { ArrowUpRight,
+    Heart,
+} from "@lucide/svelte";
     import { LINKS } from "$lib/data/links";
     import { track } from "$lib/analytics";
 
@@ -39,7 +41,7 @@
 
 <section class="not-prose mt-12 pt-8 border-t border-border/60 {className}">
     <h2 class="text-2xl font-bold mb-3 flex items-center gap-2.5">
-        <Heart class="w-5 h-5 shrink-0" color={ACCENT} aria-hidden="true" />
+        <Heart class="size-6 shrink-0 text-rose-500" />
         Support Nocturne
     </h2>
     <p class="text-muted-foreground mb-5">

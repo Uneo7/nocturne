@@ -22,12 +22,11 @@
     RefreshCw,
     Target,
   } from "lucide-svelte";
-  import SiteChangeIcon from "$lib/components/icons/SiteChangeIcon.svelte";
   import SiteChangeImpactChart from "$lib/components/reports/SiteChangeImpactChart.svelte";
   import { getSiteChangeImpact } from "$api/reports.remote";
   import { requireDateParamsContext } from "$lib/hooks/date-params.svelte";
   import { contextResource } from "$lib/hooks/resource-context.svelte";
-
+    
   // Get shared date params from context (set by reports layout)
   // Default: 30 days to capture multiple site changes for meaningful analysis
   const reportsParams = requireDateParamsContext(30);
@@ -65,8 +64,7 @@
   <div class="space-y-4">
     <div class="flex flex-wrap items-center justify-between gap-4">
       <div>
-        <h1 class="flex items-center gap-3 text-2xl font-bold @md:text-3xl">
-          <SiteChangeIcon class="h-6 w-6 text-rose-600 @md:h-8 @md:w-8" />
+        <h1 class="text-2xl font-bold @md:text-3xl">
           Site Change Impact
         </h1>
         <p class="mt-1 text-muted-foreground">
@@ -88,6 +86,7 @@
         </Button>
       </div>
     </div>
+
 
     <!-- Date Range Info -->
     <Card class="bg-muted/30">

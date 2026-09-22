@@ -3,7 +3,7 @@
 //! (halos, blooms, line hints) only when `Style::fine`.
 
 use nocturne_watercolour_core::domain::{
-    LiftStroke, Operation, Palette, Paper, PigmentRole, RadiusProfile, Scene,
+    LiftStroke, Operation, Palette, Paper, PigmentRole, RadiusProfile, Scene, StrokeSpan,
 };
 
 use super::geometry::{Crescent, Frame, bell_outline};
@@ -122,15 +122,31 @@ pub(super) fn alarm_bell(style: &Style, palette: &Palette) -> Scene {
         bell_outline(&frame, 0.5, top, lip, lip_hw, lip_depth),
         0.012,
     );
+    // The stencil owns the silhouette; the body only has to deliver pigment
+    // inside it. One wide stamp would do that on the reveal's first step, so
+    // the footprint is pre-wet in a single pass — water alone leaves no mark —
+    // and the pigment is hatched in, giving the pen a path long enough to
+    // pace. The turns at x 0.06 and 0.94 fall outside the mask.
+    let (band_top, band_bottom) = (top - 0.01, lip + lip_depth * 1.2);
+    let rows = if style.fine() { 7 } else { 5 };
+    p.at(
+        0.0,
+        water(
+            frame.line(0.5, 0.32, 0.5, 0.62),
+            0.42,
+            style.water(0.75),
+            0.15,
+        ),
+    );
     p.at(
         0.0,
         brush(
-            frame.line(0.5, 0.32, 0.5, 0.62),
-            0.42,
+            frame.hatch(0.06, 0.94, band_top, band_bottom, rows),
+            frame.hatch_radius(band_top, band_bottom, rows),
             base,
-            style.conc(0.7),
-            style.water(1.1),
-            0.15,
+            style.conc(0.42),
+            style.water(0.42),
+            0.75,
         ),
     );
     p.at(
@@ -152,10 +168,11 @@ pub(super) fn alarm_bell(style: &Style, palette: &Palette) -> Scene {
                 radius: RadiusProfile::uniform(0.035),
                 strength: 0.55,
                 softness: 0.8,
+                span: StrokeSpan::FULL,
             }),
         );
     }
-    p.dry(0.5).clear_mask(0.5);
+    p.glaze(0.5, 0.1).clear_mask(0.5);
     p.at(
         0.5,
         brush(
@@ -234,7 +251,7 @@ pub(super) fn linked_rings(style: &Style, palette: &Palette) -> Scene {
             ),
         );
     }
-    p.dry(0.5);
+    p.glaze(0.5, 0.1);
     p.at(0.5, ring(0.62, accent));
     if style.fine() {
         p.at(
@@ -275,25 +292,43 @@ pub(super) fn report_pages(style: &Style, palette: &Palette) -> Scene {
     let front = [0.36, 0.30, 0.72, 0.84];
     let mut p = Painting::new(style.ticks(400));
     let fill = |rect: [f32; 4], pigment: usize, conc: f32| {
-        let cx = (rect[0] + rect[2]) * 0.5;
-        brush(
-            frame.line(cx, rect[1] + 0.12, cx, rect[3] - 0.12),
-            0.32,
-            pigment,
-            style.conc(conc),
-            style.water(1.0),
-            0.1,
+        let (x0, y0, x1, y1) = (rect[0], rect[1], rect[2], rect[3]);
+        let cx = (x0 + x1) * 0.5;
+        let rows = if style.fine() { 7 } else { 5 };
+        let radius = frame.hatch_radius(y0, y1, rows);
+        // The stencil owns the silhouette; the body only has to deliver
+        // pigment inside it. Pre-wet the footprint, then hatch the pigment
+        // in so the reveal has a path to pace. The turns sit outside the mask.
+        (
+            water(
+                frame.line(cx, y0 + 0.12, cx, y1 - 0.12),
+                0.32,
+                style.water(0.75),
+                0.15,
+            ),
+            brush(
+                frame.hatch(x0 - radius - 0.02, x1 + radius + 0.02, y0, y1, rows),
+                radius,
+                pigment,
+                style.conc(conc * 0.6),
+                style.water(0.42),
+                0.75,
+            ),
         )
     };
     p.mask(0.0, frame.rect(back[0], back[1], back[2], back[3]), 0.01);
-    p.at(0.0, fill(back, shadow, 0.45));
-    p.dry(0.45);
+    let (back_wet, back_hatch) = fill(back, shadow, 0.45);
+    p.at(0.0, back_wet);
+    p.at(0.0, back_hatch);
+    p.glaze(0.45, 0.1);
     p.mask(
         0.45,
         frame.rect(front[0], front[1], front[2], front[3]),
         0.01,
     );
-    p.at(0.45, fill(front, base, 0.55));
+    let (front_wet, front_hatch) = fill(front, base, 0.55);
+    p.at(0.45, front_wet);
+    p.at(0.45, front_hatch);
     if style.fine() {
         p.at(
             0.5,
@@ -306,7 +341,7 @@ pub(super) fn report_pages(style: &Style, palette: &Palette) -> Scene {
                 0.9,
             ),
         );
-        p.dry(0.75);
+        p.glaze(0.75, 0.1);
         let lines: &[(f32, f32)] = if style.full() {
             &[(0.5, 0.63), (0.58, 0.63), (0.66, 0.58), (0.74, 0.52)]
         } else {
@@ -346,16 +381,37 @@ pub(super) fn magnifying_glass(style: &Style, palette: &Palette) -> Scene {
     let thickness = if style.fine() { 0.05 } else { 0.062 };
     let mut p = Painting::new(style.ticks(380));
     let ring_at = if style.fine() && !style.dark() {
-        p.mask(0.0, frame.circle(cx, cy, r - 0.02, 32), 0.008);
+        let lens_r = r - 0.02;
+        let rows = 7;
+        let radius = frame.hatch_radius(cy - lens_r, cy + lens_r, rows);
+        p.mask(0.0, frame.circle(cx, cy, lens_r, 32), 0.008);
+        // The stencil owns the silhouette; the body only has to deliver pigment
+        // inside it. Pre-wet the footprint, then hatch the pigment in so the
+        // reveal has a path to pace. The turns sit outside the mask.
+        p.at(
+            0.0,
+            water(
+                frame.line(cx - 0.15, cy, cx + 0.15, cy),
+                0.3,
+                style.water(0.75),
+                0.15,
+            ),
+        );
         p.at(
             0.0,
             brush(
-                vec![frame.pt(cx, cy)],
-                0.3,
+                frame.hatch(
+                    cx - lens_r - radius,
+                    cx + lens_r + radius,
+                    cy - lens_r,
+                    cy + lens_r,
+                    rows,
+                ),
+                radius,
                 glow,
-                style.conc(0.25),
-                style.water(0.9),
-                0.3,
+                style.conc(0.25 * 0.6),
+                style.water(0.42),
+                0.75,
             ),
         );
         p.at(
@@ -369,7 +425,7 @@ pub(super) fn magnifying_glass(style: &Style, palette: &Palette) -> Scene {
                 0.9,
             ),
         );
-        p.dry(0.45).clear_mask(0.45);
+        p.glaze(0.45, 0.1).clear_mask(0.45);
         0.45
     } else {
         0.0

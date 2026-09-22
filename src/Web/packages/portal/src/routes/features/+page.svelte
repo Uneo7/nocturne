@@ -1,7 +1,18 @@
 <script lang="ts">
-    import { ArrowRight, Play, Check } from "@lucide/svelte";
+    import { Artwork } from "@nocturne/watercolour";
+    import {
+        ArrowRight,
+        Play,
+        Check,
+        Activity,
+        FileText,
+        Plug,
+        Server,
+        Shield,
+        Users,
+    } from "@lucide/svelte";
     import { Button } from "@nocturne/ui/ui/button";
-    import ReportsDemo from "$lib/components/features/ReportsDemo.svelte";
+        import ReportsDemo from "$lib/components/features/ReportsDemo.svelte";
     import ConnectorsDemo from "$lib/components/features/ConnectorsDemo.svelte";
     import AlarmsDemo from "$lib/components/features/AlarmsDemo.svelte";
     import AuthDemo from "$lib/components/features/AuthDemo.svelte";
@@ -9,54 +20,51 @@
     import { DATA_SOURCES } from "$lib/data/connectors";
     import { AVAILABLE_REPORT_COUNT } from "$lib/data/reports";
 
-    const SUPPORTING = [
+    type SupportingCard = {
+        title: string;
+        copy: string;
+        icon: typeof Server;
+        color: string;
+    };
+
+    const SUPPORTING: SupportingCard[] = [
         {
             title: "Your server, your data",
             copy: "Self-hosted with Docker Compose, Portainer, or Helm. No cloud middleman and no third-party analytics. Your health data never leaves your infrastructure.",
-            icon: "shield",
+            icon: Server,
             color: "oklch(0.577 0.245 27.325)",
         },
         {
             title: "One install, many people",
             copy: "Run a household, a clinic, or a community on a single deployment. Each tenant lives in its own database schema, behind its own subdomain.",
-            icon: "users",
+            icon: Users,
             color: "oklch(0.65 0.18 270)",
         },
         {
             title: "Real-time updates",
             copy: "New readings reach every open dashboard and follower the moment they are written, over WebSockets rather than polling.",
-            icon: "zap",
+            icon: Activity,
             color: "oklch(0.769 0.188 70)",
         },
         {
             title: "Drop-in Nightscout",
             copy: "Speaks the Nightscout v1, v2, and v3 APIs. xDrip+, Loop, AndroidAPS, Trio, and watch faces keep working after you switch.",
-            icon: "plug",
+            icon: Plug,
             color: "oklch(0.72 0.16 150)",
         },
         {
             title: "Built for years of data",
             copy: "PostgreSQL underneath, with the reports written to query years of readings. Jumping to a date from years ago stays quick.",
-            icon: "chart",
+            icon: FileText,
             color: "oklch(0.6 0.118 184.704)",
         },
         {
             title: "Free and open source",
             copy: "AGPL-3.0 licensed, so you can read it, fork it, and self-host it for nothing. Stewarded by the Nightscout Foundation.",
-            icon: "sparkle",
+            icon: Shield,
             color: "oklch(0.488 0.243 264.376)",
         },
-    ] as const;
-
-    // Inline SVG paths for supporting cards
-    const ICON_PATHS: Record<string, string> = {
-        shield:  "M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z",
-        users:   "M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M12 7a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75",
-        zap:     "M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z",
-        plug:    "M12 22v-5M9 8V2M15 8V2M18 8v4a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8z",
-        chart:   "M3 3v18h18M7 15l3-3 4 4 6-6",
-        sparkle: "M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .962 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.962 0z",
-    };
+    ];
 </script>
 
 <div class="max-w-[1200px] mx-auto px-6 overflow-x-clip">
@@ -64,6 +72,16 @@
     <!-- Hero -->
     <div class="pt-20 pb-16 border-b border-border relative overflow-hidden">
         <div class="aurora-subtle absolute inset-0 pointer-events-none" aria-hidden="true"></div>
+        <!-- The copy caps at 900px, so on a wide screen the paint takes the
+             rest of the band rather than shrinking into a well. -->
+        <Artwork
+            artwork="heart-rate"
+            palette="ember"
+            motion="auto"
+            autoplay="once"
+            position="absolute"
+            class="pointer-events-none -right-12 top-10 hidden size-[380px] opacity-90 lg:block xl:size-[440px]"
+        />
         <div class="relative flex flex-col gap-6 max-w-[900px]">
             <div class="flex items-center gap-3 text-[17px] font-semibold uppercase tracking-[0.02em] text-glucose-in-range">
                 <span class="size-2.5 rounded-full bg-glucose-in-range eyebrow-dot"></span>
@@ -163,14 +181,10 @@
         <div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {#each SUPPORTING as card (card.title)}
                 <div class="p-7 rounded-2xl border border-border/60 bg-card/50 backdrop-blur-sm flex flex-col gap-3.5">
-                    <div class="size-[52px] rounded-xl grid place-items-center"
+                    <div class="size-[52px] rounded-xl grid place-items-center overflow-hidden"
                          style:background="color-mix(in oklch, {card.color}, transparent 85%)"
                          style:border="1px solid color-mix(in oklch, {card.color}, transparent 60%)">
-                        <svg width="26" height="26" viewBox="0 0 24 24" fill="none"
-                             stroke={card.color} stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"
-                             aria-hidden="true">
-                            <path d={ICON_PATHS[card.icon]}/>
-                        </svg>
+                        <card.icon class="size-6" color={card.color} />
                     </div>
                     <h3 class="text-[1.15rem] font-bold text-foreground m-0 leading-[1.25]">{card.title}</h3>
                     <p class="text-[0.9375rem] leading-[1.6] text-muted-foreground m-0">{card.copy}</p>

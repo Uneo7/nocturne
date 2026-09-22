@@ -108,6 +108,28 @@ export class EngineHost {
     this.leases = Math.max(0, this.leases - 1);
   }
 
+  /**
+   * Builds the device and its pipelines without holding a slot.
+   *
+   * The first `acquire` blocks the main thread while the wasm module loads and
+   * WebGPU hands over a device, measured at 375 ms on a discrete laptop GPU.
+   * Paid on a pointer-enter, it freezes the very transition it was starting.
+   * A host that expects live artwork warms the engine at idle instead.
+   *
+   * Resolves `false` when there is no usable GPU. That is not an error: the
+   * baked and static paths cover it, and they are what would have been chosen.
+   */
+  async warm(): Promise<boolean> {
+    try {
+      await this.acquire();
+      return true;
+    } catch {
+      return false;
+    } finally {
+      this.release();
+    }
+  }
+
   onLost(listener: (message: string) => void): () => void {
     this.lostListeners.add(listener);
     return () => this.lostListeners.delete(listener);

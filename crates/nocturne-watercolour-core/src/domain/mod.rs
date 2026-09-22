@@ -16,7 +16,10 @@ pub mod timeline;
 
 pub use grid::SimulationGrid;
 pub use image::Image;
-pub use ops::{BrushStroke, LiftStroke, Mask, Operation, Point, RadiusProfile, WaterStroke};
+pub use ops::{
+    BrushStroke, LiftStroke, MAX_SETTLE_SHARE, Mask, Operation, Point, RadiusProfile, StrokeSpan,
+    WaterStroke,
+};
 pub use optics::CompositeMode;
 pub use palette::{Palette, PaletteEntry, PigmentRole};
 pub use paper::{Paper, PaperField};

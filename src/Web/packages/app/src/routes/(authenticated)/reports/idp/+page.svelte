@@ -27,7 +27,7 @@
   import { bg, bgLabel, formatMediumDateTime, formatNumber, formatNumericDate } from "$lib/utils/formatting";
   import { requireDateParamsContext } from "$lib/hooks/date-params.svelte";
   import { contextResource } from "$lib/hooks/resource-context.svelte";
-
+    
   // Get shared date params from context (set by reports layout)
   // Default: 14 days is the standard IDP report period
   const reportsParams = requireDateParamsContext(14);
@@ -75,8 +75,7 @@
   <div class="space-y-4">
     <div class="flex items-center justify-between flex-wrap gap-4">
       <div>
-        <h1 class="text-2xl @md:text-3xl font-bold flex items-center gap-3">
-          <Syringe class="w-6 h-6 @md:w-8 @md:h-8 text-primary" />
+        <h1 class="text-2xl @md:text-3xl font-bold">
           Insulin Dosing Profile
         </h1>
         <p class="text-muted-foreground mt-1">
@@ -95,6 +94,7 @@
         </Button>
       </div>
     </div>
+
 
     <!-- Period info -->
     <div class="flex items-center gap-2 text-sm text-muted-foreground">

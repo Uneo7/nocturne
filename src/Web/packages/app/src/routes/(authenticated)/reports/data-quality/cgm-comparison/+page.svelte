@@ -12,7 +12,7 @@
   import { getCgmComparison, getReportsAnalysis } from "$api/reports.remote";
   import { requireDateParamsContext } from "$lib/hooks/date-params.svelte";
   import { contextResource } from "$lib/hooks/resource-context.svelte";
-  import PairedGlucoseScatter from "$lib/components/reports/cgm-comparison/PairedGlucoseScatter.svelte";
+    import PairedGlucoseScatter from "$lib/components/reports/cgm-comparison/PairedGlucoseScatter.svelte";
   import { bg, bgDelta, bgLabel } from "$lib/utils/formatting";
 
   const params = requireDateParamsContext(14);

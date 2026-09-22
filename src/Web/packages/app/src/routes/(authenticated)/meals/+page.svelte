@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { startOfDay, toDayString } from "$lib/utils/date-range";
+    import { startOfDay, toDayString } from "$lib/utils/date-range";
   import { formatLongDate } from "$lib/utils/formatting";
   import { Calendar } from "lucide-svelte";
   import type {

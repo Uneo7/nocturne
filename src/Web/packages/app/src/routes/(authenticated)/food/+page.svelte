@@ -9,7 +9,8 @@
   import Composer from './Composer.svelte';
   import GiIcon from './GiIcon.svelte';
 
-  import { Plus, Download, Upload, Search, Star, X, Apple } from 'lucide-svelte';
+  import { Plus, Download, Upload, Search, Star, X } from 'lucide-svelte';
+  import { Artwork } from "@nocturne/watercolour";
   import * as Select from '$lib/components/ui/select';
   import { Button } from '$lib/components/ui/button';
   import { Separator } from '$lib/components/ui/separator';
@@ -151,9 +152,13 @@
       <div class="py-16 text-center text-muted-foreground">Loading food database...</div>
     {:else if state.foods.length === 0}
       <div class="flex flex-col items-center justify-center gap-3 px-6 py-16 text-center text-muted-foreground">
-        <div class="grid h-14 w-14 place-items-center rounded-2xl" style="background: var(--carbs-soft); color: var(--carbs-strong);">
-          <Apple class="h-7 w-7" />
-        </div>
+        <Artwork
+          artwork="apple"
+          palette="moss"
+          motion="auto"
+          autoplay="once"
+          class="size-48"
+        />
         <div class="text-lg font-semibold text-foreground">Build your food database</div>
         <div class="max-w-[380px] text-[13px] leading-relaxed">
           Add the foods you eat regularly with their carb counts. Once they're here,

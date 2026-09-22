@@ -36,7 +36,7 @@ body is parsed.
   },
   "timeline": {
     "total_ticks": 320,
-    "events": [ { "at_tick": 0, "op": { "brush": { "path": [[x, y], ...], "radius": [r0, r1], "pigment": 0, "concentration": ..., "water": ..., "softness": ... } } } ]
+    "events": [ { "at_tick": 0, "op": { "brush": { "path": [[x, y], ...], "radius": [r0, r1], "pigment": 0, "concentration": ..., "water": ..., "softness": ..., "span": [0.0, 1.0] } } } ]
   }
 }
 ```
@@ -65,13 +65,26 @@ coordinates (measured in the isotropic metric - see Architecture).
 
 | Variant | Fields |
 |---|---|
-| `brush` | `path: [[x, y]]`, `radius: [start, end]`, `pigment: usize` (index into palette), `concentration`, `water`, `softness` |
-| `water` | `path`, `radius`, `water`, `softness` |
-| `lift` | `path`, `radius`, `strength`, `softness` |
+| `brush` | `path: [[x, y]]`, `radius: [start, end]`, `span: [start, end]`, `pigment: usize` (index into palette), `concentration`, `water`, `softness` |
+| `water` | `path`, `radius`, `span`, `water`, `softness` |
+| `lift` | `path`, `radius`, `span`, `strength`, `softness` |
 | `dry` | `rate` |
 | `dry_all` | - |
 | `set_mask` | `mask`: `{ polygon: { points, feather } }` or `{ path: { points, radius, feather } }` |
 | `clear_mask` | - |
+
+### `span` on brush, water and lift strokes
+
+`span` is an arc-length window `[start, end]` (both `0..1`) over the stroke's
+**whole** path: the operation lays down only the part of the path the span
+covers, as `max(0, coverage_upto(end) - coverage_upto(start))`. Consecutive
+spans of one stroke tile `0..1`, so the union of a stroke's spans deposits
+exactly what laying the whole path at once would; radius, jitter and paper
+shift are evaluated against the full path in both terms so adjacent spans join
+without a seam. The field is optional and defaults to `[0, 1]` — the whole
+path — so pre-span documents still load unchanged. The choreography pass (see
+Architecture) splits each authored stroke into a narrow, walking span to make
+the reveal draw the brush along the path instead of stamping the stroke whole.
 
 ## Timeline semantics
 
@@ -101,6 +114,39 @@ next, so they schedule events directly.
 - The fixed timestep (`DT = 1` per tick, no variable stepping) is what makes
   any determinism statement possible at all.
 
+## The icon request (`iconScene`)
+
+`iconScene` builds a `lucide-<name>-<palette>-<seed>` scene from a Lucide icon
+instead of a catalogue id. Its arguments are the element list JSON, the icon
+`name`, then the same `seed`/`palette`/`intensity`/`detail`/`surface`/
+`simResolution` as `catalogueScene`, and the hints JSON (`""` keeps the
+defaults).
+
+**The element list** is the vanilla `lucide` package's `IconNode` shape: a
+`[tag, attrs]` pair per element in a 24-grid stroke-drawn icon. The authoring
+layer parses `path`, `circle`, `rect`, `line`, `ellipse`, `polyline` and
+`polygon` (the path grammar `M L H V C S Q T A Z` absolute and relative),
+flattens them to subpaths tagged closed or open, and paints closed subpaths as
+stencil-and-fill bodies, open ones as wet-on-dry marks. The 24 grid maps to
+`0.1..0.9` of the square frame.
+
+**The hints JSON** tunes that generic mapping per icon. Every field is optional
+and an absent one keeps the default:
+
+| Field | Default | Meaning |
+|---|---|---|
+| `fill` | `[]` | Indices of open subpaths (flattened order) to close and paint as bodies |
+| `markRadius` | `1.0` | Multiplier on the Lucide stroke half-width for marks |
+| `smallMarks` | `4` | Marks kept at `small` detail (longest first) |
+| `holes` | `[]` | Circles lifted out of the wet body before it glazes, in 24-grid units: `[cx, cy, r]` |
+| `bodyRole` | `"base_wash"` | Pigment role for bodies |
+| `markRole` | `"shadow"` | Pigment role for marks |
+
+The library ships a built-in table for the icons that need it (`ICON_HINTS` in
+`src/api/icon-hints.ts`, mirrored by `scripts/icon-hints.json`); the caller's
+hints merge over it per field. The scene a request produces is a normal
+`SceneDocumentV1` and flows through the same pipeline as a catalogue scene.
+
 ## The baked strip format
 
 `strip.png` holds `frames` equal frames stacked vertically, evenly spaced in
@@ -128,31 +174,40 @@ it:
 `PngExporter` encodes a premultiplied-linear-RGBA `Image` to **straight-alpha
 sRGB 8-bit** PNG. Colour is divided back out of alpha before encoding; pixels
 with `alpha < 1/1024` are written as transparent black (dividing those would
-only amplify quantisation noise into colour fringes). The `final-512.png` /
-`final-128.png` assets are the finished, fully dry artwork at the artwork's
+only amplify quantisation noise into colour fringes). The `final-512` /
+`final-128` assets are the finished, fully dry artwork at the artwork's
 natural aspect (long edge 512 / 128 px).
+
+Those PNGs are intermediates. `scripts/to-webp.mjs` re-encodes every one as
+WebP at quality 82 and deletes it, which is what `pnpm bake` runs and what the
+loader asks for. These washes are mostly soft alpha, which PNG stores badly.
+`alphaQuality` is 100, so libwebp keeps the alpha plane lossless - alpha is
+what carries the shape here, and only the pigment colour is approximated.
 
 ## The curated asset set
 
-The full catalogue (17 artworks x 6 palettes x 2 surfaces) is ~100 MB and too
-large to check in, so the bundle ships a **curated subset**: each artwork in
-one default palette x both surfaces, baked at seed 1610, intensity 0.7 and
-`large` detail. The set is **5.98 MB on disk** (30 sets: 15 artworks x 2
-surfaces; strips average ~120 KB, 512 px finals ~78 KB, 128 px finals ~7 KB)
-and is tracked in git so the baked fallback works on a fresh clone with no GPU.
+The full catalogue (every artwork x 6 palettes x 2 surfaces) is too large to
+check in, so the bundle ships a **curated subset**: each of the 50 artworks and
+icons in the manifest in one default palette x both surfaces, baked at seed
+1610, intensity 0.7 and `large` detail. The set is **5.4 MB on disk** (400
+files: 100 sets x 4 files) and is tracked in git so the baked fallback works on
+a fresh clone with no GPU. It was 20.3 MB as PNG.
 
-Assets live under `assets/<artwork>/<palette>[_dark]/` as `final-512.png`,
-`final-128.png`, `strip.png`, `strip.json`. `<palette>` is the built-in name
+Assets live under `assets/<artwork>/<palette>[_dark]/` as `final-512.webp`,
+`final-128.webp`, `strip.webp`, `strip.json`. `<palette>` is the built-in name
 for light surfaces and `<palette>_dark` is the same palette composited in
-luminous mode for dark ones.
+luminous mode for dark ones. Baked icons live under `assets/lucide-<name>/...`
+(the twelve baked sets are 96 files of the total).
 
 **Palette fallback rule.** Only the default palette per artwork is baked. A
 request for a palette that is not bundled falls back to the default palette's
 assets for that artwork (same surface): `assets.ts` resolves a missing
 `<palette>[_dark]` directory to `DEFAULT_PALETTE[artwork][_dark]`. The table in
 `scripts/bake-manifest.json` (mirrored by `DEFAULT_PALETTE` in `assets.ts`, and
-a test asserts they stay in sync) is the source of truth. The fallback applies
-to the bundled set only - an `assetBaseUrl` is served exactly as requested.
+a test asserts they stay in sync) is the source of truth. Icons resolve through
+the same rule: `iconAssetKey(name)` produces the `lucide-<name>` key and a
+missing palette falls back to the icon's default. The fallback applies to the
+bundled set only - an `assetBaseUrl` is served exactly as requested.
 
 | Artwork | Default palette |
 |---|---|
@@ -162,6 +217,16 @@ to the bundled set only - an `assetBaseUrl` is served exactly as requested.
 | `confirmation-mark`, `confirmation-background` | `moss` |
 | `report-pages`, `distant-mountains` | `slate` |
 | `tab-underline` | `ember` |
+
+The baked icons (the twelve wishlist subjects, from the same manifest):
+
+| Icon | Default palette |
+|---|---|
+| `lucide-database`, `lucide-server`, `lucide-cpu` | `slate` |
+| `lucide-fingerprint`, `lucide-battery` | `water` |
+| `lucide-sprout`, `lucide-scale` | `moss` |
+| `lucide-syringe`, `lucide-flag`, `lucide-megaphone`, `lucide-rocket` | `ember` |
+| `lucide-book-open` | `moonlight` |
 
 ## Regenerating the assets
 

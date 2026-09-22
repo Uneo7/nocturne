@@ -16,7 +16,7 @@
   import { MS_PER_HOUR } from "$lib/components/actogram/actogram";
   import { useActogramReport } from "$lib/hooks/actogram-report.svelte";
   import { toDayString } from "$lib/utils/date-range";
-
+  
   const VISIBLE_DAYS = 14;
 
   const report = useActogramReport("Error Loading Step Count Report");

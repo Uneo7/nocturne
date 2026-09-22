@@ -1,7 +1,8 @@
+use nocturne_watercolour_core::domain::paint;
 use nocturne_watercolour_core::domain::sim::{self, PigmentCoefficients, Scratch, SimParams};
 use nocturne_watercolour_core::domain::{
     BrushStroke, Operation, Palette, Paper, PaperField, Point, RadiusProfile, Seed, SimulationGrid,
-    WaterStroke,
+    StrokeSpan, WaterStroke,
 };
 
 const N: u32 = 96;
@@ -23,6 +24,7 @@ fn disc(radius: f32, concentration: f32, water: f32) -> Operation {
         concentration,
         water,
         softness: 0.2,
+        span: StrokeSpan::FULL,
     })
 }
 
@@ -31,6 +33,173 @@ fn run(grid: &mut SimulationGrid, coef: &[PigmentCoefficients], params: &SimPara
     for _ in 0..ticks {
         sim::step(grid, coef, params, &mut scratch);
     }
+}
+
+fn wet_cell_count(grid: &SimulationGrid) -> usize {
+    grid.wet.iter().filter(|&&w| w > 0.0).count()
+}
+
+#[test]
+fn a_drying_sheet_reaches_dry_instead_of_an_equilibrium() {
+    let params = SimParams::default();
+    for rate in [0.65, 3.0] {
+        let (mut grid, coef) = fresh(Seed(41));
+        let w = grid.width as usize;
+        let (x0, x1, y0, y1) = (w / 3, 2 * w / 3, w / 3, 2 * w / 3);
+        for y in y0..y1 {
+            for x in x0..x1 {
+                let i = y * w + x;
+                grid.wet[i] = 1.0;
+                grid.pressure[i] = 1.0;
+                grid.saturation[i] = 0.8;
+                grid.capacity[i] = 1.0;
+                grid.pigments_in_water[i] = 0.5;
+            }
+        }
+        assert!(grid.total_water() > 0.0);
+        sim::apply(&mut grid, &Operation::Dry { rate }, &params, Seed(41));
+        run(&mut grid, &coef, &params, 600);
+        assert_eq!(
+            grid.total_water(),
+            0.0,
+            "water must leave, not plateau (rate {rate})"
+        );
+        assert_eq!(
+            wet_cell_count(&grid),
+            0,
+            "the sheet must finish drying (rate {rate})"
+        );
+    }
+}
+
+#[test]
+fn absorption_moves_water_from_the_film_to_the_fibres() {
+    let params = SimParams {
+        evaporation: 0.0,
+        ..Default::default()
+    };
+    let (mut grid, coef) = fresh(Seed(44));
+    let i = grid.index(48, 48);
+    grid.wet[i] = 1.0;
+    grid.capacity[i] = 1.0;
+    grid.pressure[i] = 0.5;
+    grid.saturation[i] = 0.5;
+    let film_before = grid.pressure[i];
+    let fibres_before = grid.saturation[i];
+    sim::pass_transfer(&mut grid, &coef, &params);
+    let film_gave = film_before - grid.pressure[i];
+    let fibres_got = grid.saturation[i] - fibres_before;
+    assert!(
+        (film_gave - fibres_got).abs() < 1e-6,
+        "film gave {film_gave}, fibres gained {fibres_got}"
+    );
+    assert!(
+        film_gave > 0.0 && film_gave <= params.capillary_absorb + 1e-5,
+        "a film thicker than capillary_absorb gives only capillary_absorb, gave {film_gave}"
+    );
+
+    let (mut grid, coef) = fresh(Seed(45));
+    let i = grid.index(48, 48);
+    grid.wet[i] = 1.0;
+    grid.capacity[i] = 1.0;
+    grid.pressure[i] = 0.001;
+    grid.saturation[i] = 0.5;
+    let film_before = grid.pressure[i];
+    let fibres_before = grid.saturation[i];
+    sim::pass_transfer(&mut grid, &coef, &params);
+    let film_gave = film_before - grid.pressure[i];
+    let fibres_got = grid.saturation[i] - fibres_before;
+    assert!(
+        (film_gave - fibres_got).abs() < 1e-6,
+        "a film thinner than capillary_absorb gives only what it has: gave {film_gave}, gained {fibres_got}"
+    );
+    assert!(
+        (film_gave - film_before).abs() < 1e-6,
+        "gave {film_gave} of {film_before}"
+    );
+}
+
+#[test]
+fn a_blooming_cell_takes_its_water_from_the_paper() {
+    let params = SimParams {
+        capillary_rate: 0.0,
+        capillary_dry: 0.0,
+        ..Default::default()
+    };
+    let (mut grid, _) = fresh(Seed(46));
+    let i = grid.index(48, 48);
+    grid.capacity[i] = 1.0;
+    grid.saturation[i] = 0.7;
+    grid.wet[i] = 0.0;
+    let mut out_s = vec![0.0; grid.cell_count()];
+    sim::pass_capillary(&mut grid, &params, &mut out_s);
+    assert_eq!(grid.wet[i], 1.0, "a cell that crosses sigma must bloom");
+    let gained = grid.pressure[i];
+    let lost = 0.7 - out_s[i];
+    assert!(
+        (gained - lost).abs() < 1e-6,
+        "pressure gained {gained}, saturation lost {lost}"
+    );
+    assert_eq!(
+        gained, params.capillary_seep,
+        "a cell with plenty of fibres takes the full seep"
+    );
+}
+
+#[test]
+fn capillary_blooms_still_fire_while_the_sheet_is_drying() {
+    let params = SimParams {
+        capillary_rate: 0.0,
+        capillary_dry: 0.0,
+        ..Default::default()
+    };
+    let (mut grid, _) = fresh(Seed(43));
+    for c in grid.capacity.iter_mut() {
+        *c = 1.0;
+    }
+    for s in grid.saturation.iter_mut() {
+        *s = 0.61;
+    }
+    grid.dry_rate = 3.0;
+    let saturation_before: f32 = grid.saturation.iter().sum();
+    let mut out_s = vec![0.0; grid.cell_count()];
+    sim::pass_capillary(&mut grid, &params, &mut out_s);
+    let blooms = wet_cell_count(&grid);
+    assert!(
+        blooms > 0,
+        "a drying sheet may still bloom: backruns are real watercolour, and a bloom now costs the fibres its water"
+    );
+    let water_after: f32 = grid.pressure.iter().sum::<f32>() + out_s.iter().sum::<f32>();
+    let error = (saturation_before - water_after).abs();
+    assert!(
+        error < 0.001 * saturation_before,
+        "the bloomed film came out of the fibres: water conserved to {error} of {saturation_before}"
+    );
+}
+
+#[test]
+fn fibres_under_a_wet_cell_dry_more_slowly_than_bare_paper() {
+    let params = SimParams::default();
+    let (mut grid, _) = fresh(Seed(42));
+    for c in grid.capacity.iter_mut() {
+        *c = 1.0;
+    }
+    for s in grid.saturation.iter_mut() {
+        *s = 1.0;
+    }
+    let dry_cell = 0;
+    let wet_cell = grid.cell_count() - 1;
+    grid.wet[wet_cell] = 1.0;
+    grid.dry_rate = 2.0;
+    let mut out_s = vec![0.0; grid.cell_count()];
+    sim::pass_capillary(&mut grid, &params, &mut out_s);
+    assert!(
+        out_s[wet_cell] > out_s[dry_cell],
+        "wet cell {} should keep more water than bare paper {}",
+        out_s[wet_cell],
+        out_s[dry_cell]
+    );
+    assert!(out_s[dry_cell] < 1.0, "bare paper must give its water up");
 }
 
 #[test]
@@ -61,7 +230,7 @@ fn stability_sweep_stays_finite_and_bounded() {
             flow_outward_eta: 0.2 * scale,
             deposition_rate: 0.5 * scale,
             lift_rate: 0.5 * scale,
-            shallow_boost: 10.0 * scale,
+            dry_deposition: 10.0 * scale,
             capillary_absorb: 0.5 * scale,
             capillary_rate: scale,
             capillary_seep: 2.0 * scale,
@@ -81,6 +250,7 @@ fn stability_sweep_stays_finite_and_bounded() {
                 radius: RadiusProfile::uniform(0.15),
                 water: 4.0,
                 softness: 1.0,
+                span: StrokeSpan::FULL,
             }),
             &params,
             Seed(6),
@@ -179,6 +349,7 @@ fn wet_on_wet_spreads_further_than_wet_on_dry() {
             radius: RadiusProfile::uniform(0.3),
             water: 1.0,
             softness: 0.3,
+            span: StrokeSpan::FULL,
         }),
         &params,
         Seed(31),
@@ -189,4 +360,132 @@ fn wet_on_wet_spreads_further_than_wet_on_dry() {
     let r_dry = pigment_radius_90(&dry);
     let r_wet = pigment_radius_90(&wet);
     assert!(r_wet > r_dry * 1.3, "wet {r_wet} vs dry {r_dry}");
+}
+
+/// The centroid of suspended pigment, in normalised coordinates.
+fn pigment_centroid(grid: &SimulationGrid, pigment: usize) -> (f32, f32) {
+    let n = grid.cell_count();
+    let (w, h) = (grid.width as usize, grid.height as usize);
+    let (mut sx, mut sy, mut total) = (0.0f64, 0.0f64, 0.0f64);
+    for i in 0..n {
+        let g = grid.pigments_in_water[pigment * n + i] as f64;
+        if g <= 0.0 {
+            continue;
+        }
+        sx += g * ((i % w) as f64 + 0.5) / w as f64;
+        sy += g * ((i / w) as f64 + 0.5) / h as f64;
+        total += g;
+    }
+    if total <= 0.0 {
+        (0.5, 0.5)
+    } else {
+        ((sx / total) as f32, (sy / total) as f32)
+    }
+}
+
+fn sweep(from: (f32, f32), to: (f32, f32), radius: f32) -> Operation {
+    Operation::Brush(BrushStroke {
+        path: vec![Point::new(from.0, from.1), Point::new(to.0, to.1)],
+        radius: RadiusProfile::uniform(radius),
+        pigment: 0,
+        concentration: 0.6,
+        water: 0.9,
+        softness: 0.3,
+        span: StrokeSpan::FULL,
+    })
+}
+
+fn without_flow(params: &SimParams) -> SimParams {
+    SimParams {
+        flow: paint::FlowParams {
+            kick: 0.0,
+            kick_max: 0.0,
+            splat_out: 0.0,
+        },
+        ..*params
+    }
+}
+
+/// A brush that was moving leaves paint that is still moving. The mark must
+/// drift the way the tip went — and not so far that it leaves where it was
+/// laid, which would take an artwork off its stencil.
+#[test]
+fn the_kick_carries_paint_the_way_the_brush_travelled() {
+    let params = SimParams::default();
+    let radius = 0.06;
+    let stroke = sweep((0.25, 0.5), (0.75, 0.5), radius);
+
+    let drift = |p: &SimParams| {
+        let (mut grid, coef) = fresh(Seed(9));
+        sim::apply(&mut grid, &stroke, p, Seed(1));
+        run(&mut grid, &coef, p, 30);
+        pigment_centroid(&grid, 0).0
+    };
+    let kicked = drift(&params);
+    let still = drift(&without_flow(&params));
+    let moved = kicked - still;
+
+    assert!(
+        moved > radius * 0.1,
+        "the kick moved the mark {moved:.4}, less than a tenth of the brush ({radius})"
+    );
+    assert!(
+        moved < radius,
+        "the kick carried the mark {moved:.4} off where it was laid, more than the \
+         brush's own radius ({radius}); an artwork would leave its stencil"
+    );
+}
+
+/// A dab has no direction, only an outward push, so it must stay put.
+#[test]
+fn a_dab_is_pushed_outward_but_not_along() {
+    let params = SimParams::default();
+    let dab = disc(0.08, 0.6, 0.9);
+    let cell = 1.0 / N as f32;
+
+    let (mut grid, coef) = fresh(Seed(9));
+    sim::apply(&mut grid, &dab, &params, Seed(1));
+    run(&mut grid, &coef, &params, 30);
+    let (cx, cy) = pigment_centroid(&grid, 0);
+    let spread = wet_cell_count(&grid);
+
+    let still = without_flow(&params);
+    let (mut grid, coef) = fresh(Seed(9));
+    sim::apply(&mut grid, &dab, &still, Seed(1));
+    run(&mut grid, &coef, &still, 30);
+    let (sx, sy) = pigment_centroid(&grid, 0);
+    let unpushed = wet_cell_count(&grid);
+
+    assert!(
+        (cx - sx).abs() < cell && (cy - sy).abs() < cell,
+        "a dab drifted to ({cx:.4}, {cy:.4}) from ({sx:.4}, {sy:.4})"
+    );
+    assert!(
+        spread > unpushed,
+        "the landing water did not push outward: {spread} wet cells against {unpushed}"
+    );
+}
+
+/// Injected velocity must not escape the bound the advection relies on.
+#[test]
+fn injected_flow_stays_inside_the_speed_bound() {
+    let params = SimParams::default();
+    let (mut grid, coef) = fresh(Seed(9));
+    // A sweep from corner to corner: the longest chord an artwork can ask
+    // for, so the kick is at its cap.
+    sim::apply(
+        &mut grid,
+        &sweep((0.02, 0.02), (0.98, 0.98), 0.1),
+        &params,
+        Seed(1),
+    );
+    run(&mut grid, &coef, &params, 30);
+    for (u, v) in grid.velocity_u.iter().zip(&grid.velocity_v) {
+        assert!(u.is_finite() && v.is_finite(), "velocity went non-finite");
+        assert!(
+            u.abs() <= params.max_velocity + 1e-4 && v.abs() <= params.max_velocity + 1e-4,
+            "velocity ({u}, {v}) escaped the bound {}",
+            params.max_velocity
+        );
+    }
 }

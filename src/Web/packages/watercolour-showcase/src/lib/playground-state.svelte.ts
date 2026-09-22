@@ -19,6 +19,7 @@ import {
 } from '@nocturne/watercolour';
 import { cubicOut, expoOut, linear, quadOut, quartOut, sineInOut } from 'svelte/easing';
 import { mode } from 'mode-watcher';
+import { LUCIDE_ICONS } from './lucide-icons';
 
 export type PlaygroundArtwork = string;
 
@@ -110,14 +111,14 @@ export class PlaygroundState {
   surface = $derived<Surface>(this.surfaceMode === 'auto' ? (mode.current === 'dark' ? 'dark' : 'light') : this.surfaceMode);
   seed = $state(1610);
   intensity = $state(0.7);
-  durationMs = $state(600);
+  durationMs = $state(3000);
   mode = $state<ArtworkMode>('auto');
   detailMode = $state<'auto' | DetailLevel>('auto');
   /** 0 = auto; anything else overrides the simulation grid side. */
   simOverride = $state(0);
   outputSize = $state<OutputSize>(512);
   easing = $state<EasingName>('engine');
-  tail = $state(0.3);
+  tail = $state(0.8);
   quality = $state<ArtworkQuality>('auto');
   dpr = $derived(Math.min(MAX_COMPONENT_DPR, typeof devicePixelRatio === 'number' ? devicePixelRatio : 1));
 
@@ -180,16 +181,13 @@ export class PlaygroundState {
     this.playing = false;
     this.finished = false;
     this.progress = 0;
+    const icon = this.artwork.startsWith('lucide:') ? LUCIDE_ICONS.find((i) => i.id === this.artwork) : undefined;
+    const detail = this.detailMode === 'auto' ? {} : { detail: this.detailMode };
     const player = createArtworkPlayer(
       canvas,
-      {
-        id: this.artwork,
-        palette: this.palette,
-        surface: this.surface,
-        seed: this.seed,
-        intensity: this.intensity,
-        ...(this.detailMode === 'auto' ? {} : { detail: this.detailMode }),
-      },
+      icon
+        ? { icon: icon.icon, name: icon.name, palette: this.palette, surface: this.surface, seed: this.seed, intensity: this.intensity, ...detail }
+        : { id: this.artwork, palette: this.palette, surface: this.surface, seed: this.seed, intensity: this.intensity, ...detail },
       {
         durationMs: this.durationMs,
         mode: this.mode,

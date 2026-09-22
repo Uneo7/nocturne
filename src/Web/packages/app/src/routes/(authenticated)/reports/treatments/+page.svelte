@@ -44,7 +44,7 @@
   import { toast } from "svelte-sonner";
   import { requireDateParamsContext } from "$lib/hooks/date-params.svelte";
   import { contextResource } from "$lib/hooks/resource-context.svelte";
-
+    
   // Import remote function forms and commands
   import {
     getTreatmentsData,

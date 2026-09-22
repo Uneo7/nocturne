@@ -15,18 +15,36 @@
 //! strip frame's long edge stays within the 256 px cap and the frame count
 //! within 16 (see `scene_tools`).
 //!
+//! A manifest entry whose id starts with `lucide:` is a Lucide icon: the
+//! element list is read from `scripts/lucide-icons.json` (regenerated from the
+//! `lucide` npm package by `scripts/lucide-icons.mjs` before cargo runs) and
+//! built into a scene with `svg_icon_scene`, so the icon's default palette
+//! drives the asset set like any artwork's. The icons lay out under
+//! `<out_dir>/lucide-<name>/...` so the browser key is `lucide-<name>`, not
+//! the manifest's `lucide:<name>`.
+//!
 //! Layout: `<out_dir>/<artwork-id>/<palette>/{final-512.png,final-128.png,strip.png,strip.json}`,
 //! where `<palette>` is the built-in name for light surfaces and `<name>_dark`
 //! the same palette composited in luminous mode for dark ones. Finals and
 //! strips are rendered at the artwork's natural aspect (long edge 512 / 128
 //! for finals, the manifest's frame size for strips).
+//!
+//! The PNGs written here are intermediates. `pnpm bake` runs
+//! `src/Web/packages/watercolour/scripts/to-webp.mjs` afterwards, which
+//! re-encodes each one as WebP and deletes it, because these washes are mostly
+//! soft alpha and PNG stores that badly: 20 MB becomes 4.4 MB. The shipped
+//! asset set is `.webp`, and that is what the loader asks for.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use nocturne_watercolour_core::application::{Exporter, Playback, Renderer};
 use nocturne_watercolour_core::domain::{Palette, Seed};
+use nocturne_watercolour_infra::authoring::{
+    IconHints, IconNode, parse_icon_elements, parse_icon_hints, svg_icon_scene,
+};
 use nocturne_watercolour_infra::export::{FrameSequence, PngExporter};
 use nocturne_watercolour_infra::gpu::{GpuContext, GpuEngine};
 use nocturne_watercolour_wasm::scene_tools::{
@@ -67,12 +85,22 @@ struct ManifestArtwork {
     strip_height: u32,
 }
 
+/// A `lucide:<name>` manifest entry: the element list and built-in hints
+/// (`scripts/lucide-icons.json` / `scripts/icon-hints.json`, both next to the
+/// manifest) the bake builds a scene from.
+struct IconBake {
+    name: String,
+    elements: Vec<IconNode>,
+    hints: IconHints,
+}
+
 struct ArtworkSpec {
     id: String,
     palettes: Vec<(String, Surface)>,
     strip_frames: u32,
     strip_width: u32,
     strip_height: u32,
+    icon: Option<IconBake>,
 }
 
 struct BakeConfig {
@@ -109,6 +137,36 @@ fn full_variants() -> Vec<(String, Surface)> {
         .collect()
 }
 
+/// The `{ "<name>": IconNode }` table `scripts/lucide-icons.mjs` regenerates
+/// from the manifest before the bake runs; the Rust side cannot read npm.
+fn load_icon_elements(path: &Path) -> BTreeMap<String, Vec<IconNode>> {
+    let text = fs::read_to_string(path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    let raw: BTreeMap<String, serde_json::Value> =
+        serde_json::from_str(&text).unwrap_or_else(|e| panic!("parse {}: {e}", path.display()));
+    raw.into_iter()
+        .map(|(name, value)| {
+            let elements = parse_icon_elements(&value.to_string())
+                .unwrap_or_else(|e| panic!("{name} element list: {e}"));
+            (name, elements)
+        })
+        .collect()
+}
+
+/// The built-in per-icon hints, one entry per name — the same
+/// `scripts/icon-hints.json` the browser's `ICON_HINTS` table imports.
+fn load_icon_hints(path: &Path) -> BTreeMap<String, IconHints> {
+    let text = fs::read_to_string(path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    let raw: BTreeMap<String, serde_json::Value> =
+        serde_json::from_str(&text).unwrap_or_else(|e| panic!("parse {}: {e}", path.display()));
+    raw.into_iter()
+        .map(|(name, value)| {
+            let hints = parse_icon_hints(&value.to_string())
+                .unwrap_or_else(|e| panic!("{name} hints: {e}"));
+            (name, hints)
+        })
+        .collect()
+}
+
 fn curated(manifest_path: &Path) -> BakeConfig {
     let text = fs::read_to_string(manifest_path).expect("read manifest");
     let manifest: BakeManifest = serde_json::from_str(&text).expect("parse manifest");
@@ -118,6 +176,9 @@ fn curated(manifest_path: &Path) -> BakeConfig {
         "medium" => DetailLevel::Medium,
         _ => DetailLevel::Large,
     };
+    let scripts = manifest_path.parent().unwrap_or_else(|| Path::new("."));
+    let elements = load_icon_elements(&scripts.join("lucide-icons.json"));
+    let hints = load_icon_hints(&scripts.join("icon-hints.json"));
     let specs = manifest
         .artworks
         .into_iter()
@@ -127,8 +188,21 @@ fn curated(manifest_path: &Path) -> BakeConfig {
                 .iter()
                 .map(|s| Surface::parse(s).expect("manifest surface"))
                 .collect();
+            let icon = a.id.strip_prefix("lucide:").map(|name| IconBake {
+                name: name.to_string(),
+                elements: elements
+                    .get(name)
+                    .unwrap_or_else(|| {
+                        panic!("manifest lists {name} but lucide-icons.json has no entry for it")
+                    })
+                    .clone(),
+                hints: hints.get(name).cloned().unwrap_or_default(),
+            });
+            let id = icon
+                .as_ref()
+                .map_or(a.id.clone(), |icon| format!("lucide-{}", icon.name));
             ArtworkSpec {
-                id: a.id,
+                id,
                 palettes: surfaces
                     .into_iter()
                     .map(|surface| (a.palette.clone(), surface))
@@ -136,6 +210,7 @@ fn curated(manifest_path: &Path) -> BakeConfig {
                 strip_frames: manifest.strip_frames,
                 strip_width: a.strip_width,
                 strip_height: a.strip_height,
+                icon,
             }
         })
         .collect();
@@ -157,6 +232,7 @@ fn whole_catalogue() -> BakeConfig {
             strip_frames: STRIP_FRAMES,
             strip_width: STRIP_EDGE,
             strip_height: STRIP_EDGE,
+            icon: None,
         })
         .collect();
     BakeConfig {
@@ -175,6 +251,7 @@ fn single_artwork(id: &str) -> BakeConfig {
         strip_frames: STRIP_FRAMES,
         strip_width: STRIP_EDGE,
         strip_height: STRIP_EDGE,
+        icon: None,
     }];
     BakeConfig {
         seed: SEED,
@@ -225,15 +302,33 @@ fn main() {
     for spec in config.specs {
         for (palette, surface) in &spec.palettes {
             let started = Instant::now();
-            let scene = catalogue_scene(
-                &spec.id,
-                config.seed,
-                palette,
-                config.intensity,
-                config.detail,
-                *surface,
-            )
-            .expect("scene");
+            let scene = match &spec.icon {
+                Some(icon) => {
+                    let palette = Palette::by_name(palette).expect("manifest palette");
+                    let scene = svg_icon_scene(
+                        &icon.name,
+                        &icon.elements,
+                        config.seed,
+                        &palette,
+                        config.intensity,
+                        config.detail,
+                        surface.background(),
+                        None,
+                        &icon.hints,
+                    );
+                    scene.validate().expect("valid icon scene");
+                    scene
+                }
+                None => catalogue_scene(
+                    &spec.id,
+                    config.seed,
+                    palette,
+                    config.intensity,
+                    config.detail,
+                    *surface,
+                )
+                .expect("scene"),
+            };
             let key = format!("{palette}{}", surface.asset_suffix());
             let dir = out_dir.join(&spec.id).join(&key);
             fs::create_dir_all(&dir).expect("create asset dir");

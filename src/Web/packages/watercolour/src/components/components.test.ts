@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { artworkAspect, detailForEdge, seedFromName } from '../types';
 import { artworkOptionsFrom, containBox, hostSurface } from './helpers';
 
@@ -74,7 +74,58 @@ describe('artworkOptionsFrom (prop to option)', () => {
 });
 
 describe('hostSurface', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function stubHost(classes: string[], scheme: string, darkPrefers: boolean): void {
+    vi.stubGlobal('document', {
+      documentElement: {
+        classList: {
+          contains: (name: string) => classes.includes(name),
+        },
+      },
+    });
+    vi.stubGlobal('getComputedStyle', () => ({ colorScheme: scheme }));
+    vi.stubGlobal('matchMedia', () => ({ matches: darkPrefers }));
+  }
+
   it('defaults to light with no DOM or dark preference', () => {
+    expect(hostSurface()).toBe('light');
+  });
+
+  it('lets a `.dark` class on <html> win', () => {
+    stubHost(['dark'], 'light', false);
+    expect(hostSurface()).toBe('dark');
+  });
+
+  it('lets a `.light` class beat a dark preference', () => {
+    stubHost(['light'], 'light', true);
+    expect(hostSurface()).toBe('light');
+  });
+
+  it('lets a computed `color-scheme: light` beat a dark preference', () => {
+    stubHost([], 'light', true);
+    expect(hostSurface()).toBe('light');
+  });
+
+  it('lets a `.light` class beat a computed `color-scheme: dark`', () => {
+    stubHost(['light'], 'dark', false);
+    expect(hostSurface()).toBe('light');
+  });
+
+  it('lets a computed `color-scheme: dark` win when no class is set', () => {
+    stubHost([], 'dark', false);
+    expect(hostSurface()).toBe('dark');
+  });
+
+  it('falls back to prefers-color-scheme when no class or color-scheme signal', () => {
+    stubHost([], '', true);
+    expect(hostSurface()).toBe('dark');
+  });
+
+  it('stays light when every signal is light or absent', () => {
+    stubHost([], 'light', false);
     expect(hostSurface()).toBe('light');
   });
 });

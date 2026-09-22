@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { BellRing } from "@lucide/svelte";
   import { formatClock } from "$lib/utils/formatting";
   import { goto } from "$app/navigation";
   import { page } from "$app/state";
@@ -34,7 +35,8 @@
   } from "$lib/components/ui/card";
   import { Badge } from "$lib/components/ui/badge";
   import SettingsPageSkeleton from "$lib/components/settings/SettingsPageSkeleton.svelte";
-  import { Bell, Plus, AlertTriangle, Check, ChevronRight, Loader2 } from "lucide-svelte";
+  import { Plus, AlertTriangle, Check, ChevronRight, Loader2 } from "lucide-svelte";
+  import { Artwork } from "@nocturne/watercolour";
   import AppLogo from "$lib/components/ui/AppLogo.svelte";
   import { resolve } from "$app/paths";
 
@@ -167,7 +169,7 @@
   <div class="flex flex-wrap items-start justify-between gap-3">
     <div class="flex items-center gap-3">
       <div class="flex h-12 w-12 items-center justify-center rounded-xl bg-primary/10">
-        <Bell class="h-6 w-6 text-primary" />
+        <BellRing class="size-6 text-primary" />
       </div>
       <div>
         <h1 class="text-2xl font-bold tracking-tight">Alerts</h1>
@@ -326,7 +328,13 @@
       <CardContent>
         {#if rules.length === 0}
           <div class="rounded-md border border-dashed py-10 text-center text-muted-foreground">
-            <Bell class="mx-auto h-8 w-8 opacity-50" />
+            <Artwork
+              artwork="alarm-bell"
+              palette="moonlight"
+              motion="auto"
+              autoplay="once"
+              class="mx-auto size-48"
+            />
             <p class="mt-2 text-sm font-medium">No alert rules yet</p>
             <p class="mt-1 text-xs">Add a rule so Nocturne can notify you when glucose goes out of range.</p>
             {#if canManageAlerts}

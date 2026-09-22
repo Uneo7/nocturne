@@ -1,8 +1,11 @@
 <script lang="ts">
+    import { Artwork } from "@nocturne/watercolour";
     import * as Accordion from "@nocturne/ui/ui/accordion";
     import { Button } from "@nocturne/ui/ui/button";
-    import { ArrowRight, HelpCircle, Download, RefreshCw, Code } from "@lucide/svelte";
-
+    import { ArrowRight, HelpCircle, Download, RefreshCw, Code,
+    Server,
+} from "@lucide/svelte";
+    
     const faqCategories = [
         {
             title: "General",
@@ -33,7 +36,7 @@
         },
         {
             title: "Installation",
-            icon: Download,
+            icon: Server,
             color: "bg-green-500/15 text-green-500",
             questions: [
                 {
@@ -105,7 +108,15 @@
 
 <div class="max-w-[900px] mx-auto px-6">
     <!-- Page heading -->
-    <div class="pt-20 pb-[60px] border-b border-border">
+    <div class="relative pt-20 pb-[60px] border-b border-border">
+        <Artwork
+            artwork="magnifying-glass"
+            palette="water"
+            motion="auto"
+            autoplay="once"
+            position="absolute"
+            class="pointer-events-none -right-8 top-16 hidden size-[260px] opacity-90 lg:block xl:size-[300px]"
+        />
         <div class="font-mono text-[11px] tracking-[0.14em] uppercase text-muted-foreground mb-4">FAQ</div>
         <h1 class="text-[clamp(2rem,4vw,3.2rem)] font-bold leading-[1.15] tracking-[-0.025em] text-foreground m-0 mb-4">
             Common questions.<br />
@@ -122,7 +133,16 @@
         {#each faqCategories as category, ci}
             <section class="py-16 border-t border-border">
                 <div class="mb-8">
-                    <div class="font-brand text-[12px] font-bold tracking-[0.14em] uppercase text-muted-foreground">0{ci + 1} &middot; {category.title}</div>
+                    <div class="flex items-center gap-3">
+                        <div
+                            class="rounded-lg {category.color} flex items-center justify-center shrink-0 w-12 h-12"
+                        >
+                            <category.icon class="w-6 h-6" />
+                        </div>
+                        <div class="font-brand text-[12px] font-bold tracking-[0.14em] uppercase text-muted-foreground">
+                            0{ci + 1} &middot; {category.title}
+                        </div>
+                    </div>
                 </div>
 
                 <Accordion.Root type="multiple" class="space-y-3">

@@ -12,12 +12,15 @@
     mode,
     fit,
     surface,
+    position = 'relative',
     onready,
     class: className = '',
   }: {
     surface?: Surface;
     /** `contain` (default) preserves the artwork's aspect; `fill` stretches to the container. */
     fit?: FitMode;
+    /** The frame's `position`; see Artwork. */
+    position?: 'relative' | 'absolute' | 'fixed' | 'sticky';
     onready?: PlayerReadyCallback;
     class?: string;
   } & ArtworkOptions = $props();
@@ -40,7 +43,8 @@
 <div
   bind:this={frame}
   aria-hidden="true"
-  style="aspect-ratio: 5 / 1; width: 10rem; position: relative"
+  style="aspect-ratio: 5 / 1; width: 10rem"
+  style:position
   class="overflow-hidden {className}"
 >
   <canvas bind:this={canvas} class="block h-full w-full"></canvas>

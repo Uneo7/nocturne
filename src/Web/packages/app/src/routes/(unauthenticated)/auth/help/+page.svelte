@@ -3,12 +3,13 @@
   import { Button } from "$lib/components/ui/button";
   import {
     HelpCircle,
-    Fingerprint,
     Smartphone,
     KeyRound,
     Globe,
     ArrowLeft,
   } from "lucide-svelte";
+  import { Artwork } from "@nocturne/watercolour";
+  import { fingerprintArtwork } from "$lib/watercolour-icons";
   // Quote the sign-in controls by name — this is the page a locked-out person
   // reaches, so the names have to match what they're looking at.
   import { signInMethodLabels } from "$lib/components/auth/labels";
@@ -37,11 +38,13 @@
     <Card.Root>
       <Card.Header>
         <div class="flex items-center gap-3">
-          <div
-            class="flex h-9 w-9 items-center justify-center rounded-full bg-primary/10"
-          >
-            <Fingerprint class="h-5 w-5 text-primary" />
-          </div>
+          <Artwork
+            icon={fingerprintArtwork}
+            palette="water"
+            motion="auto"
+            autoplay="once"
+            class="size-56"
+          />
           <Card.Title class="text-lg">Passkeys</Card.Title>
         </div>
       </Card.Header>

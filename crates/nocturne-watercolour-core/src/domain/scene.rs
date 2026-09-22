@@ -1,6 +1,6 @@
 //! A complete, validated description of an artwork.
 
-use super::ops::{Mask, Operation, Point};
+use super::ops::{MAX_SETTLE_SHARE, Mask, Operation, Point};
 use super::optics::CompositeMode;
 use super::palette::{MAX_PIGMENTS, Palette};
 use super::paper::Paper;
@@ -331,6 +331,9 @@ impl Scene {
                     check_range(errors, ev, "radius", *radius, 0.0, MAX_RADIUS);
                 }
             }
+            Operation::Settle { share } => {
+                check_range(errors, ev, "share", *share, 0.0, MAX_SETTLE_SHARE);
+            }
             Operation::DryAll | Operation::ClearMask => {}
         }
     }
@@ -363,7 +366,7 @@ fn check_range(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::ops::{BrushStroke, RadiusProfile};
+    use crate::domain::ops::{BrushStroke, RadiusProfile, StrokeSpan};
 
     fn valid_scene() -> Scene {
         let seed = Seed(3);
@@ -377,6 +380,7 @@ mod tests {
                 concentration: 0.5,
                 water: 0.8,
                 softness: 0.3,
+                span: StrokeSpan::FULL,
             }),
         );
         Scene {

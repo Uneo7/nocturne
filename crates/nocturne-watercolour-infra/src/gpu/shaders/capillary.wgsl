@@ -3,8 +3,11 @@
 // function so the transfer is conservative without atomics; `capillary_wet`
 // then wets cells whose new saturation crosses sigma (blooms), reading s2
 // and writing only the cell's own wet/pressure. Deviation from Curtis: no
-// destination threshold delta, as in the CPU reference. No deviation from
-// the CPU reference.
+// destination threshold delta, as in the CPU reference; fibres under a wet
+// cell decay at P.wet_capillary_dry share of the bare-paper rate; a bloom
+// takes the water it adds to the cell's film out of the fibres (scratch
+// s2), so re-wetting costs the reservoir and cannot cycle. No deviation
+// from the CPU reference.
 
 fn capillary_transfer(s_from: f32, c_from: f32, s_to: f32, c_to: f32) -> f32 {
     if s_from > P.capillary_epsilon * c_from && s_from > s_to {
@@ -29,9 +32,8 @@ fn capillary(@builtin(global_invocation_id) gid: vec3<u32>) {
         ns -= capillary_transfer(si, ci, sj, cj);
         ns += capillary_transfer(sj, cj, si, ci);
     }
-    if wet(i) == 0.0 {
-        ns *= 1.0 - P.capillary_dry * state[o_dry_rate()] * P.dt;
-    }
+    let share = select(P.wet_capillary_dry, 1.0, wet(i) == 0.0);
+    ns *= 1.0 - P.capillary_dry * state[o_dry_rate()] * P.dt * share;
     scratch[so_s() + i] = clamp(ns, 0.0, max(ci, 0.0));
 }
 
@@ -41,7 +43,9 @@ fn capillary_wet(@builtin(global_invocation_id) gid: vec3<u32>) {
     if i >= P.n { return; }
     let m = state[o_m() + i];
     if wet(i) == 0.0 && scratch[so_s() + i] > P.capillary_sigma * state[o_c() + i] && m > 0.01 {
+        let seep = min(P.capillary_seep * m, scratch[so_s() + i]);
         state[o_wet() + i] = 1.0;
-        state[o_p() + i] = min(state[o_p() + i] + P.capillary_seep * m, P.max_water_depth);
+        state[o_p() + i] = min(state[o_p() + i] + seep, P.max_water_depth);
+        scratch[so_s() + i] -= seep;
     }
 }

@@ -15,6 +15,16 @@
 //! - Capillary transfer has no destination threshold (`delta`); it is bounded
 //!   by the source saturation threshold and the destination's remaining
 //!   capacity instead.
+//! - Fibres under a wet cell give their water up at `wet_capillary_dry` share
+//!   of the bare-paper rate, so the reservoir empties while a film still
+//!   covers the cell; at full share the reservoir feeds the surface as fast as
+//!   it evaporates and a drying sheet settles to equilibrium instead of
+//!   drying.
+//! - Capillary absorption and seep are transfers between the surface film and
+//!   the paper fibres, not Curtis's one-way sinks: absorption takes the water
+//!   it adds to the fibres out of the film, and a bloom takes the water it
+//!   adds to a cell's film out of that cell's fibres. A sheet that
+//!   manufactures water from an inexhaustible reservoir never dries.
 //! - The flow-outward drain is scaled by local water depth
 //!   (`clamp(p / DRAIN_DEPTH, DRAIN_MIN, DRAIN_MAX)`) and by paper height
 //!   (`1.5 - h`): water that pooled in a low spot at the boundary drains, and
@@ -41,7 +51,7 @@
 //!   tolerated, `Scene::validate` rejects it upstream.
 
 use super::grid::SimulationGrid;
-use super::ops::{Mask, Operation};
+use super::ops::{MAX_SETTLE_SHARE, Mask, Operation};
 use super::paint::{self, StampParams, StampTarget};
 use super::palette::Palette;
 use super::seed::Seed;
@@ -72,9 +82,21 @@ pub struct SimParams {
     pub diffusion_depth: f32,
     pub deposition_rate: f32,
     pub lift_rate: f32,
-    /// Extra deposition as water thins below `shallow_depth`.
-    pub shallow_boost: f32,
-    pub shallow_depth: f32,
+    /// Film depth at or below which a cell counts as drying. Just above
+    /// `dry_threshold`.
+    pub wet_lo: f32,
+    /// Film depth at or above which the film counts as deep.
+    pub wet_hi: f32,
+    /// Deposition multiplier while the film is deep — pigment rides the water.
+    pub settle_base: f32,
+    /// Extra deposition as the film thins, over `settle_base`.
+    pub dry_deposition: f32,
+    /// Exponent on dryness.
+    pub settle_curve: f32,
+    /// Water the fibres draw from the film each tick, scaled by
+    /// `Dry { rate }`: it is the sheet's largest sink, five times base
+    /// evaporation, so leaving it unscaled would leave the settle rate no
+    /// authority over how long the paper stays damp.
     pub capillary_absorb: f32,
     /// Fraction of capacity a cell must hold before it feeds neighbours.
     pub capillary_epsilon: f32,
@@ -82,6 +104,11 @@ pub struct SimParams {
     pub capillary_sigma: f32,
     pub capillary_rate: f32,
     pub capillary_dry: f32,
+    /// Share of `capillary_dry` that fibres under a wet cell give up. A film
+    /// on the surface slows the fibres drying but does not stop it; at zero
+    /// the reservoir feeds the surface as fast as it evaporates and the sheet
+    /// never finishes drying.
+    pub wet_capillary_dry: f32,
     /// Water depth a bloom-wetted cell receives.
     pub capillary_seep: f32,
     pub evaporation: f32,
@@ -89,36 +116,42 @@ pub struct SimParams {
     /// Extra evaporation multiplier where the bleed mask is `0`.
     pub mask_evaporation: f32,
     pub stamp: StampParams,
+    pub flow: paint::FlowParams,
 }
 
 impl Default for SimParams {
     fn default() -> Self {
         SimParams {
-            slope_gain: 1.6,
-            pressure_gain: 0.9,
+            slope_gain: 0.6,
+            pressure_gain: 0.2,
             viscosity: 0.1,
             drag: 0.02,
             max_velocity: 0.45,
             jacobi_iterations: 8,
             blur_radius: 5,
             flow_outward_eta: 0.06,
-            pigment_diffusion: 0.05,
+            pigment_diffusion: 0.6,
             water_diffusion: 0.1,
             diffusion_depth: 0.6,
-            deposition_rate: 0.003,
+            deposition_rate: 0.025,
             lift_rate: 0.002,
-            shallow_boost: 2.0,
-            shallow_depth: 0.3,
-            capillary_absorb: 0.02,
+            wet_lo: 0.03,
+            wet_hi: 0.5,
+            settle_base: 0.02,
+            dry_deposition: 6.0,
+            settle_curve: 3.0,
+            capillary_absorb: 0.003,
             capillary_epsilon: 0.45,
             capillary_sigma: 0.6,
             capillary_rate: 0.25,
             capillary_dry: 0.01,
+            wet_capillary_dry: 0.35,
             capillary_seep: 0.12,
-            evaporation: 0.004,
+            evaporation: 0.001,
             dry_threshold: 0.02,
             mask_evaporation: 5.0,
             stamp: StampParams::default(),
+            flow: paint::FlowParams::default(),
         }
     }
 }
@@ -223,7 +256,7 @@ pub fn apply(grid: &mut SimulationGrid, op: &Operation, params: &SimParams, seed
     let (w, h) = (grid.width, grid.height);
     match op {
         Operation::Brush(s) => {
-            let stamp = paint::rasterize_path_aspect(
+            let stamp = paint::rasterize_path_span(
                 &s.path,
                 s.radius,
                 s.softness,
@@ -235,11 +268,13 @@ pub fn apply(grid: &mut SimulationGrid, op: &Operation, params: &SimParams, seed
                 grid.aspect,
                 seed,
                 params.stamp,
+                s.span,
             );
-            paint::apply_brush(grid, &stamp, s);
+            let flow = paint::stroke_flow(&s.path, s.span, grid.aspect, s.water, params.flow);
+            paint::apply_brush(grid, &stamp, s, flow);
         }
         Operation::Water(s) => {
-            let stamp = paint::rasterize_path_aspect(
+            let stamp = paint::rasterize_path_span(
                 &s.path,
                 s.radius,
                 s.softness,
@@ -251,11 +286,13 @@ pub fn apply(grid: &mut SimulationGrid, op: &Operation, params: &SimParams, seed
                 grid.aspect,
                 seed,
                 params.stamp,
+                s.span,
             );
-            paint::apply_water(grid, &stamp, s);
+            let flow = paint::stroke_flow(&s.path, s.span, grid.aspect, s.water, params.flow);
+            paint::apply_water(grid, &stamp, s, flow);
         }
         Operation::Lift(s) => {
-            let stamp = paint::rasterize_path_aspect(
+            let stamp = paint::rasterize_path_span(
                 &s.path,
                 s.radius,
                 s.softness,
@@ -267,10 +304,12 @@ pub fn apply(grid: &mut SimulationGrid, op: &Operation, params: &SimParams, seed
                 grid.aspect,
                 seed,
                 params.stamp,
+                s.span,
             );
             paint::apply_lift(grid, &stamp, s);
         }
         Operation::Dry { rate } => grid.dry_rate = rate.clamp(0.0, 64.0),
+        Operation::Settle { share } => grid.settle_share = share.clamp(0.0, MAX_SETTLE_SHARE),
         Operation::DryAll => dry_all(grid),
         Operation::SetMask(mask) => set_mask(grid, mask),
         Operation::ClearMask => grid.bleed_mask.iter_mut().for_each(|m| *m = 1.0),
@@ -506,6 +545,13 @@ pub fn pass_advect(
     }
 }
 
+/// Hermite smoothstep of `x` between `lo` and `hi`, clamped to `0..1`.
+#[inline]
+fn smoothstep(lo: f32, hi: f32, x: f32) -> f32 {
+    let t = ((x - lo) / (hi - lo).max(1e-6)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
 /// Per-cell exchange between suspended and deposited pigment, evaporation,
 /// capillary absorption and drying. In place: each cell reads only itself.
 pub fn pass_transfer(
@@ -521,7 +567,9 @@ pub fn pass_transfer(
         let p = grid.pressure[i];
         let h = grid.paper_height[i];
         let m = grid.bleed_mask[i];
-        let shallow = 1.0 + params.shallow_boost * (1.0 - (p / params.shallow_depth).min(1.0));
+        let wet = smoothstep(params.wet_lo, params.wet_hi, p);
+        let settle_gate =
+            params.settle_base + params.dry_deposition * (1.0 - wet).powf(params.settle_curve);
         for (k, coef) in pigments.iter().enumerate().take(grid.pigment_count) {
             let idx = k * n + i;
             let g = grid.pigments_in_water[idx];
@@ -530,7 +578,7 @@ pub fn pass_transfer(
                 * (1.0 - h * coef.granulation)
                 * coef.density
                 * params.deposition_rate
-                * shallow
+                * settle_gate
                 * DT;
             let mut up = d * (1.0 + (h - 1.0) * coef.granulation) * coef.density
                 / coef.staining_power
@@ -541,12 +589,16 @@ pub fn pass_transfer(
             grid.pigments_deposited[idx] = (d + down - up).clamp(0.0, 1.0);
             grid.pigments_in_water[idx] = (g + up - down).clamp(0.0, MAX_SUSPENDED);
         }
-        let evap =
-            params.evaporation * grid.dry_rate * (1.0 + params.mask_evaporation * (1.0 - m)) * DT;
+        let boost = 1.0 + params.mask_evaporation * (1.0 - m);
+        let evap = (params.evaporation * grid.dry_rate + grid.settle_share * p) * boost * DT;
         let mut np = (p - evap).max(0.0);
         let c = grid.capacity[i];
         let s = grid.saturation[i];
-        grid.saturation[i] = (s + (params.capillary_absorb * DT).min((c - s).max(0.0))).min(c);
+        let absorbed = (params.capillary_absorb * grid.dry_rate * DT)
+            .min((c - s).max(0.0))
+            .min(np);
+        grid.saturation[i] = (s + absorbed).min(c);
+        np -= absorbed;
         if np < params.dry_threshold {
             for k in 0..grid.pigment_count {
                 let idx = k * n + i;
@@ -574,7 +626,10 @@ fn capillary_transfer(params: &SimParams, s_from: f32, c_from: f32, s_to: f32, c
 
 /// Spreads saturation through the paper fibres and wets cells that saturate
 /// (blooms/backruns). Saturation is double-buffered; `wet` and `pressure` are
-/// updated in place for the cell's own index only.
+/// updated in place for the cell's own index only. Fibres under a wet cell
+/// still give their water up, at `wet_capillary_dry` share of the bare-paper
+/// rate, and a bloom takes the water it adds to the cell's film out of its
+/// fibres, so re-wetting costs the reservoir and cannot cycle.
 pub fn pass_capillary(grid: &mut SimulationGrid, params: &SimParams, out_s: &mut [f32]) {
     let n = grid.cell_count();
     for i in 0..n {
@@ -589,16 +644,22 @@ pub fn pass_capillary(grid: &mut SimulationGrid, params: &SimParams, out_s: &mut
             ns -= capillary_transfer(params, s[i], c[i], s[j], c[j]);
             ns += capillary_transfer(params, s[j], c[j], s[i], c[i]);
         }
-        if grid.wet[i] == 0.0 {
-            ns *= 1.0 - params.capillary_dry * grid.dry_rate * DT;
-        }
+        let share = if grid.wet[i] == 0.0 {
+            1.0
+        } else {
+            params.wet_capillary_dry
+        };
+        ns *= 1.0 - params.capillary_dry * grid.dry_rate * DT * share;
         out_s[i] = ns.clamp(0.0, c[i].max(0.0));
     }
-    for (i, &ns) in out_s.iter().enumerate().take(n) {
+    for (i, slot) in out_s.iter_mut().enumerate() {
         let m = grid.bleed_mask[i];
+        let ns = *slot;
         if grid.wet[i] == 0.0 && ns > params.capillary_sigma * grid.capacity[i] && m > 0.01 {
+            let seep = (params.capillary_seep * m).min(ns);
             grid.wet[i] = 1.0;
-            grid.pressure[i] = (grid.pressure[i] + params.capillary_seep * m).min(MAX_WATER_DEPTH);
+            grid.pressure[i] = (grid.pressure[i] + seep).min(MAX_WATER_DEPTH);
+            *slot -= seep;
         }
     }
 }

@@ -9,12 +9,19 @@
 //!
 //! # Artistic duration
 //!
-//! `duration_ms` maps wall-clock progress `p in 0..1` to ticks with
-//! `ease(p) = 1 - (1 - p)^2`: the first half of the duration runs three
-//! quarters of the ticks, so the wash lands and spreads quickly and the
-//! remaining time is spent watching it settle and dry. `set_progress_curve`
-//! swaps this for a linear one-to-one mapping when a caller supplies its own
-//! easing via `advance_to_progress`.
+//! `duration_ms` maps wall-clock progress `p in 0..1` to ticks through one of
+//! three [`ProgressCurve`]s. [`ProgressCurve::FrontLoaded`] eases the whole
+//! duration with `ease(p) = 1 - (1 - p)^2`; [`ProgressCurve::Linear`] maps
+//! one-for-one; the default [`ProgressCurve::Reveal`] is piecewise linear,
+//! running `tick_split` of the ticks inside `wall_split` of the wall-clock
+//! and the rest over the rest. Paint needs many simulation ticks inside its
+//! 600 ms; drying does not, and running the 2.4 s tail at paint tick rate
+//! would blow the frame budget, so the curve splits instead of easing. The
+//! split is where the drawing ends — the tick of the scene's last stroke
+//! event — so the wall-clock paint phase covers exactly the brushwork and the
+//! tail covers the spread, bloom, settling and drying that follow it.
+//! `set_progress_curve` swaps this for a linear one-to-one mapping when a
+//! caller supplies its own easing via `advance_to_progress`.
 //!
 //! # Seeking
 //!
@@ -25,12 +32,16 @@
 //! # Checkpoint policy and memory bound
 //!
 //! A checkpoint is taken at tick 0, at every tick that carries a timeline
-//! event, and every `CheckpointPolicy::every_ticks` ticks, subject to the
-//! backend's `checkpoint_capacity`. When the budget is full, the oldest
-//! periodic (non-event) checkpoint after tick 0 is released to make room;
-//! if only event checkpoints remain, no more are taken and seeks replay
-//! further. Memory is therefore `capacity * checkpoint_bytes`, where the
-//! backend derives capacity from its own budget.
+//! event at least `CheckpointPolicy::min_event_spacing` ticks after the
+//! newest checkpoint, and every `CheckpointPolicy::every_ticks` ticks,
+//! subject to the backend's `checkpoint_capacity`. Event checkpoints are
+//! never evicted, so the spacing floor stops a dense event stream from
+//! filling the budget with them and starving the periodic rule. When the
+//! budget is full, the oldest periodic (non-event) checkpoint after tick 0
+//! is released to make room; if only event checkpoints remain, no more are
+//! taken and seeks replay further. Memory is therefore
+//! `capacity * checkpoint_bytes`, where the backend derives capacity from
+//! its own budget.
 
 use crate::domain::{Operation, Scene, SubSeed};
 
@@ -44,7 +55,7 @@ pub enum PlaybackState {
 }
 
 /// How `advance_by_elapsed` and `seek_progress` map progress to ticks.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ProgressCurve {
     /// `ease(p) = 1 - (1 - p)^2`: the first half of the duration runs three
     /// quarters of the ticks, so the wash lands fast and the tail settles.
@@ -53,16 +64,77 @@ pub enum ProgressCurve {
     /// `advance_to_progress` and their own easing, so `progress()` stays in
     /// the same space they drive in.
     Linear,
+    /// Wall-clock `wall_split` of the duration runs `tick_split` of the
+    /// ticks, the rest of the duration runs the rest: the reveal paints in
+    /// its first fifth and spends the remainder setting into the page.
+    /// `tick_split` is where the drawing ends (the scene's last stroke
+    /// event), not where an evaporation rate changes. Constructed only
+    /// through [`ProgressCurve::reveal_for`], which clamps both splits away
+    /// from the ends.
+    Reveal { wall_split: f32, tick_split: f32 },
+}
+
+/// Fraction of wall-clock the paint phase gets for a [`ProgressCurve::Reveal`].
+pub const DEFAULT_PAINT_WALL_FRACTION: f32 = 0.2;
+
+/// Both reveal splits are clamped away from the ends so neither phase can
+/// degenerate to zero length.
+const SPLIT_MIN: f32 = 0.05;
+const SPLIT_MAX: f32 = 0.95;
+
+impl ProgressCurve {
+    /// The reveal curve for `scene`: the paint phase ends where the pen
+    /// leaves the paper — the scene's last stroke event — so the wall-clock
+    /// tail covers exactly the ticks the sheet spends spreading, settling and
+    /// drying. A timeline with no strokes falls back to its last `Dry`, then
+    /// to `0.3`.
+    pub fn reveal_for(scene: &Scene, wall_split: f32) -> ProgressCurve {
+        let total = scene.timeline.total_ticks.max(1) as f32;
+        let last_stroke = scene
+            .timeline
+            .events
+            .iter()
+            .rev()
+            .find_map(|e| match &e.op {
+                Operation::Brush(_) | Operation::Water(_) | Operation::Lift(_) => {
+                    Some(e.at_tick as f32 / total)
+                }
+                _ => None,
+            });
+        let tick_split = match last_stroke {
+            Some(t) => t,
+            None => scene
+                .timeline
+                .events
+                .iter()
+                .rev()
+                .find_map(|e| match &e.op {
+                    Operation::Dry { .. } => Some(e.at_tick as f32 / total),
+                    _ => None,
+                })
+                .unwrap_or(0.3),
+        };
+        ProgressCurve::Reveal {
+            wall_split: wall_split.clamp(SPLIT_MIN, SPLIT_MAX),
+            tick_split: tick_split.clamp(SPLIT_MIN, SPLIT_MAX),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CheckpointPolicy {
     pub every_ticks: u32,
+    /// Minimum gap in ticks between event checkpoints, so a dense event
+    /// stream cannot fill the budget with never-evicted checkpoints.
+    pub min_event_spacing: u32,
 }
 
 impl Default for CheckpointPolicy {
     fn default() -> Self {
-        CheckpointPolicy { every_ticks: 32 }
+        CheckpointPolicy {
+            every_ticks: 32,
+            min_event_spacing: 8,
+        }
     }
 }
 
@@ -78,12 +150,59 @@ pub fn ease_inverse(eased: f32) -> f32 {
     1.0 - (1.0 - e).powf(1.0 / EASE_EXPONENT)
 }
 
+/// Progress -> tick fraction for [`ProgressCurve::Reveal`], piecewise linear
+/// through `(0,0)`, `(wall_split, tick_split)`, `(1,1)`.
+pub fn reveal_ticks(progress: f32, wall_split: f32, tick_split: f32) -> f32 {
+    let p = progress.clamp(0.0, 1.0);
+    let w = wall_split.clamp(SPLIT_MIN, SPLIT_MAX);
+    let t = tick_split.clamp(SPLIT_MIN, SPLIT_MAX);
+    if p <= w {
+        p / w * t
+    } else {
+        t + (p - w) / (1.0 - w) * (1.0 - t)
+    }
+}
+
+/// Exact inverse of [`reveal_ticks`].
+pub fn reveal_progress(tick_fraction: f32, wall_split: f32, tick_split: f32) -> f32 {
+    let t = tick_fraction.clamp(0.0, 1.0);
+    let w = wall_split.clamp(SPLIT_MIN, SPLIT_MAX);
+    let ts = tick_split.clamp(SPLIT_MIN, SPLIT_MAX);
+    if t <= ts {
+        t / ts * w
+    } else {
+        w + (t - ts) / (1.0 - ts) * (1.0 - w)
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 struct Checkpoint {
     tick: u32,
     id: CheckpointId,
     at_event: bool,
 }
+
+/// Simulation ticks a single wall-clock advance may run.
+///
+/// A reveal is driven one animation frame at a time, and a tick is the
+/// expensive thing in a frame. Without a ceiling the cost of a frame is
+/// whatever the frame before it took: a hitch asks for more ticks, which makes
+/// the next frame longer, which asks for more still. The ceiling breaks that
+/// loop by letting the reveal *slip* instead — it finishes a little late
+/// rather than stuttering, which for a decorative hero is the trade nobody
+/// notices.
+///
+/// It also makes the brushwork's speed a property of the artwork rather than
+/// of the machine: every device that can afford the budget draws at the same
+/// rate, and one that cannot falls behind smoothly instead of dropping frames.
+///
+/// Six is fitted to the cost of a tick on the grids live mode uses. Measured
+/// on a discrete laptop GPU a tick at 256 cells costs 0.35-1.06 ms, so six is
+/// a few milliseconds of a 16 ms frame there and still leaves headroom on an
+/// integrated GPU several times slower. For scale, Sudo Aquarelle — the
+/// reference this simulation follows — runs two substeps a frame on a grid
+/// thirteen times larger.
+pub const DEFAULT_TICK_BUDGET: u32 = 6;
 
 pub struct Playback<S: Simulator> {
     sim: S,
@@ -94,6 +213,7 @@ pub struct Playback<S: Simulator> {
     elapsed_progress: f32,
     curve: ProgressCurve,
     policy: CheckpointPolicy,
+    tick_budget: u32,
     checkpoints: Vec<Checkpoint>,
 }
 
@@ -106,6 +226,7 @@ impl<S: Simulator> Playback<S> {
             return Err(EngineError::new("duration_ms must be positive"));
         }
         sim.load(&scene)?;
+        let curve = ProgressCurve::reveal_for(&scene, DEFAULT_PAINT_WALL_FRACTION);
         let mut pb = Playback {
             sim,
             scene,
@@ -113,8 +234,9 @@ impl<S: Simulator> Playback<S> {
             state: PlaybackState::Paused,
             duration_ms,
             elapsed_progress: 0.0,
-            curve: ProgressCurve::FrontLoaded,
+            curve,
             policy: CheckpointPolicy::default(),
+            tick_budget: DEFAULT_TICK_BUDGET,
             checkpoints: Vec::new(),
         };
         pb.take_checkpoint(true)?;
@@ -124,8 +246,31 @@ impl<S: Simulator> Playback<S> {
     pub fn with_policy(mut self, policy: CheckpointPolicy) -> Self {
         self.policy = CheckpointPolicy {
             every_ticks: policy.every_ticks.max(1),
+            min_event_spacing: policy.min_event_spacing,
         };
         self
+    }
+
+    /// Caps the ticks one [`Self::advance_by_elapsed`] or
+    /// [`Self::advance_to_progress`] may run; see [`DEFAULT_TICK_BUDGET`].
+    /// Zero is read as no cap, which is what the bake and the native examples
+    /// want — they are not drawing frames to a clock.
+    pub fn with_tick_budget(mut self, ticks: u32) -> Self {
+        self.tick_budget = ticks;
+        self
+    }
+
+    pub fn tick_budget(&self) -> u32 {
+        self.tick_budget
+    }
+
+    /// The furthest tick one advance may reach from where it is now.
+    fn budgeted(&self, target: u32) -> u32 {
+        if self.tick_budget == 0 {
+            target
+        } else {
+            target.min(self.tick.saturating_add(self.tick_budget))
+        }
     }
 
     pub fn scene(&self) -> &Scene {
@@ -162,6 +307,10 @@ impl<S: Simulator> Playback<S> {
         match self.curve {
             ProgressCurve::FrontLoaded => ease_inverse(t),
             ProgressCurve::Linear => t,
+            ProgressCurve::Reveal {
+                wall_split,
+                tick_split,
+            } => reveal_progress(t, wall_split, tick_split),
         }
     }
 
@@ -170,6 +319,12 @@ impl<S: Simulator> Playback<S> {
         match self.curve {
             ProgressCurve::FrontLoaded => (ease(p) * self.total_ticks() as f32).round() as u32,
             ProgressCurve::Linear => (p * self.total_ticks() as f32).round() as u32,
+            ProgressCurve::Reveal {
+                wall_split,
+                tick_split,
+            } => {
+                (reveal_ticks(p, wall_split, tick_split) * self.total_ticks() as f32).round() as u32
+            }
         }
     }
 
@@ -218,7 +373,14 @@ impl<S: Simulator> Playback<S> {
             (self.elapsed_progress + elapsed_seconds.max(0.0) * 1000.0 / self.duration_ms).min(1.0);
         let target = self.tick_for_progress(self.elapsed_progress);
         if target > self.tick {
-            self.run_to(target)?;
+            let reached = self.budgeted(target);
+            self.run_to(reached)?;
+            if reached < target {
+                // Hold the clock to the tick actually reached. Carrying the
+                // shortfall forward would ask the next frame for even more
+                // ticks, which is the runaway the budget exists to stop.
+                self.elapsed_progress = self.progress();
+            }
         }
         Ok(())
     }
@@ -231,8 +393,15 @@ impl<S: Simulator> Playback<S> {
         let p = progress.clamp(0.0, 1.0);
         let target = (p * self.total_ticks() as f32).round() as u32;
         if target > self.tick {
-            self.run_to(target)?;
+            let reached = self.budgeted(target);
+            self.run_to(reached)?;
+            if reached < target {
+                self.elapsed_progress = self.progress();
+                return Ok(());
+            }
         } else if target < self.tick {
+            // A seek is a checkpoint restore plus a replay, not a frame's
+            // worth of simulation, so the budget does not apply to it.
             self.seek_tick(target)?;
         }
         self.elapsed_progress = p;
@@ -289,8 +458,22 @@ impl<S: Simulator> Playback<S> {
             self.tick += 1;
             if self.tick < self.total_ticks() {
                 let at_event = self.scene.timeline.events_at(self.tick).next().is_some();
-                if at_event || self.tick.is_multiple_of(self.policy.every_ticks) {
-                    self.take_checkpoint(at_event)?;
+                let periodic = self.tick.is_multiple_of(self.policy.every_ticks);
+                if at_event {
+                    let newest = self
+                        .checkpoints
+                        .iter()
+                        .map(|c| c.tick)
+                        .filter(|&t| t <= self.tick)
+                        .max()
+                        .unwrap_or(0);
+                    if self.tick.saturating_sub(newest) >= self.policy.min_event_spacing {
+                        self.take_checkpoint(true)?;
+                    } else if periodic {
+                        self.take_checkpoint(false)?;
+                    }
+                } else if periodic {
+                    self.take_checkpoint(false)?;
                 }
             }
         }
@@ -357,6 +540,103 @@ impl<S: Simulator> Playback<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::application::CpuEngine;
+    use crate::domain::{
+        Background, BrushStroke, Palette, Paper, Point, RadiusProfile, SceneId, Seed,
+        SimResolution, SizeHint, StrokeSpan, Timeline,
+    };
+
+    fn reveal_scene(timeline: Timeline) -> Scene {
+        let seed = Seed(7);
+        Scene {
+            id: SceneId("reveal-test".into()),
+            size_hint: SizeHint {
+                width: 64,
+                height: 64,
+            },
+            paper: Paper::cold_press(seed),
+            palette: Palette::moonlight(),
+            timeline,
+            seed,
+            sim_resolution: SimResolution(64),
+            background: Background::Transparent,
+        }
+    }
+
+    fn budget_scene() -> Scene {
+        let mut t = Timeline::new(400);
+        t.push(
+            0,
+            Operation::Brush(BrushStroke {
+                path: vec![Point::new(0.2, 0.5), Point::new(0.8, 0.5)],
+                radius: RadiusProfile::uniform(0.1),
+                pigment: 0,
+                concentration: 0.5,
+                water: 0.8,
+                softness: 0.4,
+                span: StrokeSpan::FULL,
+            }),
+        );
+        t.push(200, Operation::Dry { rate: 3.0 });
+        reveal_scene(t)
+    }
+
+    /// The frame that arrives late must not make the next frame worse. One
+    /// advance runs at most the budget however much wall clock it is handed.
+    #[test]
+    fn one_advance_never_runs_more_than_its_tick_budget() {
+        let mut pb = Playback::new(CpuEngine::default(), budget_scene(), 1000.0)
+            .unwrap()
+            .with_tick_budget(3);
+        pb.play();
+        // Ten seconds against a one-second reveal: the whole timeline, asked
+        // for at once.
+        pb.advance_by_elapsed(10.0).unwrap();
+        assert_eq!(pb.current_tick(), 3, "one advance ran past its budget");
+        let before = pb.current_tick();
+        pb.advance_by_elapsed(10.0).unwrap();
+        assert_eq!(pb.current_tick() - before, 3, "the shortfall compounded");
+    }
+
+    /// The clock follows the ticks that were actually run, so a reveal that
+    /// cannot keep up slips rather than stuttering — and still finishes.
+    #[test]
+    fn a_budgeted_reveal_slips_but_still_arrives() {
+        let mut pb = Playback::new(CpuEngine::default(), budget_scene(), 1000.0)
+            .unwrap()
+            .with_tick_budget(4);
+        pb.play();
+        let mut frames = 0;
+        while pb.current_tick() < pb.total_ticks() && frames < 1000 {
+            let before = pb.current_tick();
+            pb.advance_by_elapsed(1.0 / 60.0).unwrap();
+            assert!(
+                pb.current_tick() - before <= 4,
+                "a frame ran {} ticks on a budget of 4",
+                pb.current_tick() - before
+            );
+            frames += 1;
+        }
+        assert_eq!(
+            pb.current_tick(),
+            pb.total_ticks(),
+            "the reveal never arrived"
+        );
+        assert!(
+            frames > 60,
+            "a budget of 4 cannot finish 400 ticks in {frames} frames"
+        );
+    }
+
+    #[test]
+    fn a_zero_budget_is_uncapped() {
+        let mut pb = Playback::new(CpuEngine::default(), budget_scene(), 1000.0)
+            .unwrap()
+            .with_tick_budget(0);
+        pb.play();
+        pb.advance_by_elapsed(10.0).unwrap();
+        assert_eq!(pb.current_tick(), pb.total_ticks());
+    }
 
     #[test]
     fn easing_is_monotone_front_loaded_and_invertible() {
@@ -367,5 +647,151 @@ mod tests {
             let p = i as f32 / 10.0;
             assert!((ease_inverse(ease(p)) - p).abs() < 1e-5);
         }
+    }
+
+    #[test]
+    fn reveal_curve_is_monotone_and_invertible() {
+        let (wall, tick) = (0.2_f32, 0.65_f32);
+        assert_eq!(reveal_ticks(0.0, wall, tick), 0.0);
+        assert_eq!(reveal_ticks(1.0, wall, tick), 1.0);
+        let mut prev = 0.0_f32;
+        for i in 0..=20 {
+            let p = i as f32 / 20.0;
+            let t = reveal_ticks(p, wall, tick);
+            assert!(t >= prev, "tick fraction must be monotone at {p}");
+            prev = t;
+            assert!(
+                (reveal_progress(t, wall, tick) - p).abs() < 1e-5,
+                "round-trip failed at {p}"
+            );
+        }
+        let mut prev = 0.0_f32;
+        for i in 0..=20 {
+            let t = i as f32 / 20.0;
+            let p = reveal_progress(t, wall, tick);
+            assert!(p >= prev, "progress must be monotone at {t}");
+            prev = p;
+            assert!(
+                (reveal_ticks(p, wall, tick) - t).abs() < 1e-5,
+                "round-trip failed at {t}"
+            );
+        }
+    }
+
+    #[test]
+    fn reveal_curve_splits_wall_clock_from_ticks() {
+        let (wall, tick) = (0.2_f32, 0.65_f32);
+        assert!((reveal_ticks(0.2, wall, tick) - 0.65).abs() < 1e-5);
+        assert!((reveal_ticks(0.1, wall, tick) - 0.325).abs() < 1e-5);
+        assert!((reveal_ticks(0.6, wall, tick) - 0.825).abs() < 1e-5);
+    }
+
+    #[test]
+    fn reveal_for_reads_the_last_laydown_off_the_scene() {
+        let brush = Operation::Brush(BrushStroke {
+            path: vec![Point::new(0.2, 0.5), Point::new(0.8, 0.5)],
+            radius: RadiusProfile::uniform(0.1),
+            pigment: 0,
+            concentration: 0.5,
+            water: 0.8,
+            softness: 0.3,
+            span: StrokeSpan::FULL,
+        });
+
+        // The normal case: the last stroke is well before the settle, so the
+        // paint phase ends where the drawing ends, not at the evaporation
+        // change.
+        let mut normal = Timeline::new(100);
+        normal.push(40, brush.clone());
+        normal.push(90, Operation::Dry { rate: 1.0 });
+        let ProgressCurve::Reveal { tick_split, .. } =
+            ProgressCurve::reveal_for(&reveal_scene(normal), 0.2)
+        else {
+            panic!("expected reveal");
+        };
+        assert!((tick_split - 0.4).abs() < 1e-5);
+
+        // No strokes: fall back to the last Dry.
+        let mut with_dry = Timeline::new(100);
+        with_dry.push(70, Operation::Dry { rate: 1.0 });
+        let ProgressCurve::Reveal { tick_split, .. } =
+            ProgressCurve::reveal_for(&reveal_scene(with_dry), 0.2)
+        else {
+            panic!("expected reveal");
+        };
+        assert!((tick_split - 0.7).abs() < 1e-5);
+
+        // No strokes and no Dry: a fixed 0.3.
+        let empty = Timeline::new(100);
+        let ProgressCurve::Reveal { tick_split, .. } =
+            ProgressCurve::reveal_for(&reveal_scene(empty), 0.2)
+        else {
+            panic!("expected reveal");
+        };
+        assert!((tick_split - 0.3).abs() < 1e-5);
+
+        // The split is clamped away from both ends.
+        let mut at_start = Timeline::new(100);
+        at_start.push(0, brush.clone());
+        let ProgressCurve::Reveal { tick_split, .. } =
+            ProgressCurve::reveal_for(&reveal_scene(at_start), 0.2)
+        else {
+            panic!("expected reveal");
+        };
+        assert_eq!(tick_split, SPLIT_MIN);
+
+        let mut at_end = Timeline::new(100);
+        at_end.push(100, brush);
+        let ProgressCurve::Reveal { tick_split, .. } =
+            ProgressCurve::reveal_for(&reveal_scene(at_end), 0.2)
+        else {
+            panic!("expected reveal");
+        };
+        assert_eq!(tick_split, SPLIT_MAX);
+    }
+
+    #[test]
+    fn splits_are_clamped_away_from_the_ends() {
+        let mut dry_at_zero = Timeline::new(100);
+        dry_at_zero.push(0, Operation::Dry { rate: 1.0 });
+        let ProgressCurve::Reveal { tick_split, .. } =
+            ProgressCurve::reveal_for(&reveal_scene(dry_at_zero), 0.0)
+        else {
+            panic!("expected reveal");
+        };
+        assert_eq!(tick_split, SPLIT_MIN);
+        assert_eq!(
+            reveal_ticks(0.5, 0.0, 0.5),
+            reveal_ticks(0.5, SPLIT_MIN, 0.5)
+        );
+
+        let mut dry_at_end = Timeline::new(100);
+        dry_at_end.push(100, Operation::Dry { rate: 1.0 });
+        let ProgressCurve::Reveal {
+            wall_split,
+            tick_split,
+        } = ProgressCurve::reveal_for(&reveal_scene(dry_at_end), 2.0)
+        else {
+            panic!("expected reveal");
+        };
+        assert_eq!(wall_split, SPLIT_MAX);
+        assert_eq!(tick_split, SPLIT_MAX);
+    }
+
+    #[test]
+    fn default_curve_is_the_reveal_curve() {
+        let mut timeline = Timeline::new(100);
+        timeline.push(0, Operation::ClearMask);
+        timeline.push(70, Operation::Dry { rate: 1.0 });
+        // The curve, not the frame budget, is what this pins.
+        let mut pb = Playback::new(CpuEngine::default(), reveal_scene(timeline), 3000.0)
+            .unwrap()
+            .with_tick_budget(0);
+        pb.play();
+        pb.advance_by_elapsed(0.6).unwrap();
+        assert_eq!(pb.current_tick(), 70);
+        pb.advance_by_elapsed(2.4).unwrap();
+        assert_eq!(pb.current_tick(), pb.total_ticks());
+        assert_eq!(pb.state(), PlaybackState::Finished);
     }
 }

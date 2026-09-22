@@ -23,7 +23,7 @@ export interface WasmInstance {
   advanceByElapsed(seconds: number): void;
   /** Linear progress-to-tick drive; callers apply their own easing first. */
   advanceToProgress(progress: number): void;
-  setProgressCurve(curve: 'frontLoaded' | 'linear'): void;
+  setProgressCurve(curve: 'frontLoaded' | 'linear' | 'reveal'): void;
   seekProgress(progress: number): void;
   finishImmediately(): void;
   progress(): number;
@@ -46,8 +46,14 @@ export interface WasmInstance {
 
 export interface WasmEngine {
   free(): void;
-  /** `settleFraction` (0 = unchanged) lengthens the reveal's drying tail. */
-  createInstance(sceneJson: string, durationMs: number, settleFraction?: number): WasmInstance;
+  /**
+   * `settleFraction` (0 = unchanged) lengthens the reveal's drying tail.
+   * `paintWallFraction` (0 = keep the default) is the share of the wall clock
+   * the brushwork gets; the playback runs `ProgressCurve::reveal_for(scene,
+   * paintWallFraction)` so the tail covers the settling after the pen leaves
+   * the paper.
+   */
+  createInstance(sceneJson: string, durationMs: number, settleFraction?: number, paintWallFraction?: number): WasmInstance;
   isLost(): boolean;
   onDeviceLost(callback: (message: string) => void): void;
   adapterName(): string;
@@ -59,6 +65,8 @@ export interface WasmModule {
   default(moduleOrPath?: unknown): Promise<unknown>;
   WatercolourEngine: { create(): Promise<WasmEngine> };
   catalogueScene(artworkId: string, seed: number, palette: string, intensity: number, detail: string, surface: string, simResolution: number): string;
+  /** Authors a watercolour scene from a Lucide element list (JSON) and returns its scene document. `hintsJson` is per-icon tuning (`""` keeps the defaults). */
+  iconScene(elementsJson: string, name: string, seed: number, palette: string, intensity: number, detail: string, surface: string, simResolution: number, hintsJson: string): string;
   catalogueIds(): string[];
   bakedManifest(frames: number, width: number, height: number, durationMs: number): string;
 }

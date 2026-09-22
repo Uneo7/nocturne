@@ -4,7 +4,7 @@
 use nocturne_watercolour_core::domain::{
     Background, BrushStroke, LiftStroke, Mask, Operation, Palette, PaletteEntry, Paper, Pigment,
     PigmentRole, Point, RadiusProfile, Rgb, Scene, SceneId, Seed, SimResolution, SizeHint,
-    Timeline, TimelineEvent, ValidationError, WaterStroke,
+    StrokeSpan, Timeline, TimelineEvent, ValidationError, WaterStroke,
 };
 use serde::{Deserialize, Serialize};
 
@@ -121,21 +121,30 @@ pub enum OperationDoc {
         concentration: f32,
         water: f32,
         softness: f32,
+        #[serde(default = "full_span")]
+        span: [f32; 2],
     },
     Water {
         path: Vec<[f32; 2]>,
         radius: [f32; 2],
         water: f32,
         softness: f32,
+        #[serde(default = "full_span")]
+        span: [f32; 2],
     },
     Lift {
         path: Vec<[f32; 2]>,
         radius: [f32; 2],
         strength: f32,
         softness: f32,
+        #[serde(default = "full_span")]
+        span: [f32; 2],
     },
     Dry {
         rate: f32,
+    },
+    Settle {
+        share: f32,
     },
     DryAll,
     SetMask {
@@ -161,6 +170,10 @@ pub enum MaskDoc {
 
 fn default_background() -> String {
     "transparent".to_string()
+}
+
+fn full_span() -> [f32; 2] {
+    [0.0, 1.0]
 }
 
 fn background_name(background: Background) -> &'static str {
@@ -252,6 +265,14 @@ fn mask_from_doc(mask: MaskDoc) -> Mask {
     }
 }
 
+fn span_to_doc(span: StrokeSpan) -> [f32; 2] {
+    [span.start, span.end]
+}
+
+fn span_from_doc(span: [f32; 2]) -> StrokeSpan {
+    StrokeSpan::new(span[0], span[1])
+}
+
 fn op_to_doc(op: &Operation) -> OperationDoc {
     match op {
         Operation::Brush(s) => OperationDoc::Brush {
@@ -261,20 +282,24 @@ fn op_to_doc(op: &Operation) -> OperationDoc {
             concentration: s.concentration,
             water: s.water,
             softness: s.softness,
+            span: span_to_doc(s.span),
         },
         Operation::Water(s) => OperationDoc::Water {
             path: points_to_doc(&s.path),
             radius: radius_to_doc(s.radius),
             water: s.water,
             softness: s.softness,
+            span: span_to_doc(s.span),
         },
         Operation::Lift(s) => OperationDoc::Lift {
             path: points_to_doc(&s.path),
             radius: radius_to_doc(s.radius),
             strength: s.strength,
             softness: s.softness,
+            span: span_to_doc(s.span),
         },
         Operation::Dry { rate } => OperationDoc::Dry { rate: *rate },
+        Operation::Settle { share } => OperationDoc::Settle { share: *share },
         Operation::DryAll => OperationDoc::DryAll,
         Operation::SetMask(m) => OperationDoc::SetMask {
             mask: mask_to_doc(m),
@@ -292,6 +317,7 @@ fn op_from_doc(op: OperationDoc) -> Operation {
             concentration,
             water,
             softness,
+            span,
         } => Operation::Brush(BrushStroke {
             path: points_from_doc(&path),
             radius: radius_from_doc(radius),
@@ -299,30 +325,36 @@ fn op_from_doc(op: OperationDoc) -> Operation {
             concentration,
             water,
             softness,
+            span: span_from_doc(span),
         }),
         OperationDoc::Water {
             path,
             radius,
             water,
             softness,
+            span,
         } => Operation::Water(WaterStroke {
             path: points_from_doc(&path),
             radius: radius_from_doc(radius),
             water,
             softness,
+            span: span_from_doc(span),
         }),
         OperationDoc::Lift {
             path,
             radius,
             strength,
             softness,
+            span,
         } => Operation::Lift(LiftStroke {
             path: points_from_doc(&path),
             radius: radius_from_doc(radius),
             strength,
             softness,
+            span: span_from_doc(span),
         }),
         OperationDoc::Dry { rate } => Operation::Dry { rate },
+        OperationDoc::Settle { share } => Operation::Settle { share },
         OperationDoc::DryAll => Operation::DryAll,
         OperationDoc::SetMask { mask } => Operation::SetMask(mask_from_doc(mask)),
         OperationDoc::ClearMask => Operation::ClearMask,
@@ -507,6 +539,17 @@ mod tests {
             parse_scene_json(&value.to_string()),
             Err(DocumentError::UnknownBackground(_))
         ));
+    }
+
+    #[test]
+    fn brush_op_without_span_round_trips_to_full_span() {
+        let json = r#"{"brush":{"path":[[0.2,0.5],[0.8,0.5]],"radius":[0.1,0.1],"pigment":0,"concentration":0.5,"water":0.8,"softness":0.3}}"#;
+        let doc: OperationDoc = serde_json::from_str(json).unwrap();
+        let op = op_from_doc(doc);
+        let Operation::Brush(s) = op else {
+            panic!("expected a brush op");
+        };
+        assert_eq!(s.span, StrokeSpan::FULL);
     }
 
     #[test]

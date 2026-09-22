@@ -18,11 +18,21 @@
     Settings,
     ChevronRight,
     Lock,
+    Trash2,
+    RefreshCw,
   } from "lucide-svelte";
   import * as Alert from "$lib/components/ui/alert";
   import { bgLabel } from "$lib/utils/formatting";
-  import { getProfileSummary, setDefaultProfile } from "$api/generated/profiles.generated.remote";
+  import { goto } from "$app/navigation";
+  import { resolve } from "$app/paths";
+  import { ConfirmDialog } from "$lib/components/ui/confirm-dialog";
+  import {
+    getProfileSummary,
+    setDefaultProfile,
+    deleteProfileByName,
+  } from "$api/generated/profiles.generated.remote";
   import { remoteErrorMessage } from "$lib/api/remote-error";
+  import { describeSubmitError } from "$lib/forms/submit-error";
   import { coachmark } from "@nocturne/coach";
   import ScheduleView from "$lib/components/schedule/ScheduleView.svelte";
   import TargetRangeCard from "$lib/components/schedule/TargetRangeCard.svelte";
@@ -30,6 +40,9 @@
   type Summary = Awaited<ReturnType<typeof getProfileSummary>>;
 
   let switchingProfile = $state<string | null>(null);
+  let confirmingDelete = $state(false);
+  let deleting = $state(false);
+  let deleteError = $state<string | null>(null);
 
   async function handleSetActive(profileName: string) {
     switchingProfile = profileName;
@@ -38,6 +51,37 @@
     } finally {
       switchingProfile = null;
     }
+  }
+
+  async function handleDelete(profileName: string) {
+    deleting = true;
+    deleteError = null;
+    try {
+      await deleteProfileByName(profileName);
+      confirmingDelete = false;
+      // The deleted name is still in the query string, which would render as a
+      // profile whose settings have vanished.
+      await goto(resolve("/settings/profile"), { replaceState: true, noScroll: true });
+    } catch (err) {
+      deleteError = describeSubmitError(err, "We couldn't delete this profile.");
+    } finally {
+      deleting = false;
+    }
+  }
+
+  /**
+   * Why this profile cannot be deleted, or null when it can. Mirrors the guard the
+   * API enforces, so the control can say what is wrong instead of failing on submit.
+   */
+  function deleteBlockedReason(
+    profileNames: string[],
+    isActive: boolean
+  ): string | null {
+    if (profileNames.length <= 1)
+      return "This is your only profile. Deleting it would leave your therapy settings with nothing to fall back on.";
+    if (isActive)
+      return "This is your active profile. Set another profile as active first, then delete this one.";
+    return null;
   }
 
   // Query for profile summary data. Read reactively via .current/.loading/.error
@@ -303,6 +347,8 @@
 
       <!-- Selected Profile Details -->
       {#if selectedProfileName && therapy}
+        {@const blockedReason = deleteBlockedReason(profileNames, therapy.isDefault === true)}
+        {@const relayedBy = therapy.dataSource ?? therapy.enteredBy}
         {#if therapy.isExternallyManaged}
           <Alert.Root class="border-muted-foreground/25 bg-muted/50">
             <Lock class="h-4 w-4" />
@@ -341,7 +387,30 @@
                     {#if therapy.enteredBy}
                       &middot; Entered by {therapy.enteredBy}
                     {/if}
+                    {#if therapy.dataSource}
+                      &middot; Synced from {therapy.dataSource}
+                    {/if}
                   </CardDescription>
+                {/if}
+              </div>
+              <div class="flex flex-col items-end gap-1 shrink-0">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  class="text-destructive hover:bg-destructive/10 hover:text-destructive"
+                  disabled={blockedReason !== null || deleting}
+                  onclick={() => {
+                    deleteError = null;
+                    confirmingDelete = true;
+                  }}
+                >
+                  <Trash2 class="h-4 w-4 mr-2" />
+                  Delete
+                </Button>
+                {#if blockedReason}
+                  <p class="text-xs text-muted-foreground max-w-56 text-right">
+                    {blockedReason}
+                  </p>
                 {/if}
               </div>
             </div>
@@ -418,6 +487,50 @@
             readOnly={!!therapy.isExternallyManaged}
           />
         </div>
+
+        <ConfirmDialog
+          open={confirmingDelete}
+          onOpenChange={(open) => (confirmingDelete = open)}
+          title="Delete the profile &ldquo;{selectedProfileName}&rdquo;?"
+          confirmLabel="Delete profile"
+          destructive
+          busy={deleting}
+          onConfirm={() => handleDelete(selectedProfileName)}
+        >
+          {#snippet description()}
+            This removes its basal rates, carb ratios, insulin sensitivity and target
+            ranges, along with their history. Your other profiles are untouched, and
+            nothing about your glucose readings or treatments changes.
+          {/snippet}
+
+          {#if therapy.isExternallyManaged}
+            <Alert.Root class="border-muted-foreground/25 bg-muted/50">
+              <RefreshCw class="h-4 w-4" />
+              <Alert.Title>
+                {relayedBy ?? "The source device"} will send this profile again
+              </Alert.Title>
+              <Alert.Description class="space-y-2">
+                <p>
+                  This profile is synced from {relayedBy ?? "an external source"}. Deleting
+                  it here does not stop it being sent, so it can reappear the next time that
+                  source syncs.
+                </p>
+                <p>
+                  To keep it from coming back, turn off profile syncing for that source, or
+                  remove the profile where it lives.
+                </p>
+                <Button variant="outline" size="sm" href="/settings/connectors">
+                  <Settings class="h-4 w-4 mr-2" />
+                  Manage data sources
+                </Button>
+              </Alert.Description>
+            </Alert.Root>
+          {/if}
+
+          {#if deleteError}
+            <p class="text-sm text-destructive">{deleteError}</p>
+          {/if}
+        </ConfirmDialog>
 
         <!-- Additional Therapy Metadata -->
         <Card class="bg-muted/30">

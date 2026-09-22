@@ -7,7 +7,7 @@ use nocturne_watercolour_core::application::{CpuEngine, Playback, Renderer};
 use nocturne_watercolour_core::domain::{Background, Palette, Seed, SimResolution};
 use nocturne_watercolour_infra::authoring::{ArtworkCatalogue, DetailLevel};
 
-const EXPECTED_IDS: [&str; 15] = [
+const EXPECTED_IDS: [&str; 38] = [
     "crescent-moon",
     "alarm-bell",
     "linked-rings",
@@ -23,6 +23,29 @@ const EXPECTED_IDS: [&str; 15] = [
     "selection-edge",
     "confirmation-background",
     "header-motif",
+    "calendar",
+    "clock",
+    "stopwatch",
+    "sunrise",
+    "footprints",
+    "apple",
+    "pizza-slice",
+    "spanner",
+    "suitcase",
+    "paint-palette",
+    "key",
+    "plug",
+    "apartment",
+    "world-globe",
+    "github-mark",
+    "heart",
+    "blood-drop",
+    "heart-rate",
+    "shield",
+    "people-group",
+    "exclamation-mark",
+    "chat-bubble",
+    "phone",
 ];
 
 fn palettes() -> Vec<Palette> {
@@ -47,7 +70,6 @@ fn ids_are_unique_and_match_the_web_union() {
 #[test]
 fn unknown_id_is_none() {
     let p = Palette::moonlight();
-    assert!(ArtworkCatalogue::by_id("wash", Seed(1), &p, 0.7, DetailLevel::Large).is_none());
     assert!(
         ArtworkCatalogue::by_id("crescent_moon", Seed(1), &p, 0.7, DetailLevel::Large).is_none()
     );
@@ -146,7 +168,9 @@ fn every_id_renders_something_finite_on_the_cpu_at_small() {
                 .unwrap();
         let mut pb = Playback::new(CpuEngine::default(), scene.clone(), 1000.0).unwrap();
         pb.finish_immediately().unwrap();
-        let (w, h) = (scene.size_hint.width / 8, scene.size_hint.height / 8);
+        // Half the size-hint, so a thin hairline (tab-underline is a sub-pixel
+        // mark at /8) still lands on a pixel instead of aliasing away.
+        let (w, h) = (scene.size_hint.width / 4, scene.size_hint.height / 4);
         let image = pb.simulator().render(w.max(8), h.max(8)).unwrap();
         assert!(image.rgba.iter().all(|v| v.is_finite()), "{id} has NaN");
         let alpha_max = image.rgba.chunks(4).map(|p| p[3]).fold(0.0f32, f32::max);

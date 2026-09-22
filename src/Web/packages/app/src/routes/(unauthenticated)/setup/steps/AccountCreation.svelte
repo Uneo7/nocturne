@@ -1,5 +1,7 @@
 <script lang="ts">
   import { Check, Fingerprint, Loader2, UserPlus } from "lucide-svelte";
+  import { Artwork } from "@nocturne/watercolour";
+  import { fingerprintArtwork } from "$lib/watercolour-icons";
   import {
     startRegistration,
     type PublicKeyCredentialCreationOptionsJSON,
@@ -162,6 +164,14 @@
 <div class="flex flex-col items-center gap-10 px-4 py-8">
   <!-- Heading -->
   <div class="flex flex-col items-center gap-4 text-center">
+    <Artwork
+      icon={fingerprintArtwork}
+      palette="water"
+      surface="dark"
+      motion="auto"
+      autoplay="once"
+      class="size-56"
+    />
     <h1
       class="font-[Montserrat] font-[250] leading-tight tracking-tight text-white"
       style="font-size: clamp(32px, 4vw, 48px);"

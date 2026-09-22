@@ -1,9 +1,10 @@
 <script lang="ts">
   import { browser } from "$app/environment";
   import { goto } from "$app/navigation";
-  import { Loader2, CalendarDays } from "lucide-svelte";
+  import { Loader2 } from "lucide-svelte";
   import { scaleThreshold } from "d3-scale";
   import { Button } from "$lib/components/ui/button";
+  import { Artwork } from "@nocturne/watercolour";
   import {
     getAvailableYears,
     getDailySummary,
@@ -33,11 +34,8 @@
     type ColorFocusRange,
     type GlucoseColorThresholds,
   } from "$lib/utils/metric-color-focus";
-  import { getDateParamsContext } from "$lib/hooks/date-params.svelte";
   import { onMount, untrack, tick } from "svelte";
   import { fade } from "svelte/transition";
-
-  const reportsParams = getDateParamsContext();
 
   // =========================================================================
   // State
@@ -143,7 +141,7 @@
     const key = `${selectedMetric}Colors` as keyof typeof colorFocusPreferences;
     const next = { ...colorFocusPreferences };
     if (colors && colors.length >= 2) {
-      next[key] = [...colors];
+      (next as Record<string, string[] | undefined>)[key] = [...colors];
     } else {
       delete next[key];
     }
@@ -195,7 +193,7 @@
       ? "avgGlucoseBand"
       : `${selectedMetric}Band`) as keyof typeof colorFocusPreferences;
     const next = { ...colorFocusPreferences };
-    if (range) next[bandKey] = [...range];
+    if (range) (next as Record<string, number[] | undefined>)[bandKey] = [...range];
     else delete next[bandKey];
     yearOverviewColors.current = next;
   }
@@ -741,11 +739,13 @@
         in:fade={{ duration: 300 }}
       >
         <div class="max-w-md space-y-4 text-center">
-          <div
-            class="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-muted"
-          >
-            <CalendarDays class="h-8 w-8 text-muted-foreground" />
-          </div>
+          <Artwork
+            artwork="calendar"
+            palette="moonlight"
+            motion="auto"
+            autoplay="once"
+            class="mx-auto size-48"
+          />
           <h2 class="text-xl font-semibold">No Data Available</h2>
           <p class="text-muted-foreground">
             There is no data to display yet. Connect a data source in your

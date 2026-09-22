@@ -5,10 +5,18 @@ import { paletteKey } from './scenes';
 
 export type AssetVariant = 'final' | 'final-small' | 'strip' | 'manifest';
 
+/**
+ * WebP, not PNG. The artwork is soft alpha washes, which PNG stores badly: the
+ * whole catalogue is 4.4 MB rather than 20 MB, and the eight files one
+ * paint-drop surface can draw are 76 KB rather than 260 KB.
+ *
+ * `scripts/to-webp.mjs` encodes them after the bake, keeping the alpha plane
+ * lossless because alpha is what carries the shape.
+ */
 const FILE_NAMES: Record<AssetVariant, string> = {
-  final: 'final-512.png',
-  'final-small': 'final-128.png',
-  strip: 'strip.png',
+  final: 'final-512.webp',
+  'final-small': 'final-128.webp',
+  strip: 'strip.webp',
   manifest: 'strip.json',
 };
 
@@ -33,10 +41,50 @@ export const DEFAULT_PALETTE: Record<string, PaletteId> = {
   'distant-mountains': 'slate',
   'connected-shores': 'water',
   'overlapping-shapes': 'dusk',
+  'calendar': 'moonlight',
+  'clock': 'slate',
+  'stopwatch': 'slate',
+  'sunrise': 'ember',
+  'footprints': 'moss',
+  'apple': 'moss',
+  'pizza-slice': 'ember',
+  'spanner': 'slate',
+  'suitcase': 'dusk',
+  'paint-palette': 'dusk',
+  'key': 'ember',
+  'plug': 'slate',
+  'apartment': 'slate',
+  'world-globe': 'water',
+  'github-mark': 'slate',
+  'heart': 'ember',
+  'blood-drop': 'ember',
+  'heart-rate': 'ember',
+  'shield': 'water',
+  'people-group': 'dusk',
+  'exclamation-mark': 'ember',
+  'chat-bubble': 'water',
+  'phone': 'slate',
+  'lucide-database': 'slate',
+  'lucide-server': 'slate',
+  'lucide-cpu': 'slate',
+  'lucide-fingerprint': 'water',
+  'lucide-battery': 'water',
+  'lucide-sprout': 'moss',
+  'lucide-scale': 'moss',
+  'lucide-syringe': 'ember',
+  'lucide-flag': 'ember',
+  'lucide-megaphone': 'ember',
+  'lucide-rocket': 'ember',
+  'lucide-book-open': 'moonlight',
 };
 
 export function defaultPaletteFor(id: ArtworkId | string): PaletteId {
   return DEFAULT_PALETTE[id] ?? 'moonlight';
+}
+
+/** The bundled asset key for a baked Lucide icon: `assets/lucide-<name>/...`. */
+export function iconAssetKey(name: string, palette?: PaletteId, surface?: Surface): AssetKey {
+  return { id: `lucide-${name}`, palette, surface };
 }
 
 /**
@@ -44,7 +92,7 @@ export function defaultPaletteFor(id: ArtworkId | string): PaletteId {
  * rewrites each entry to a hashed URL at build time; nothing is fetched until
  * a loader is called.
  */
-const bundled = import.meta.glob('../../assets/*/*/*.{png,json}', {
+const bundled = import.meta.glob('../../assets/*/*/*.{webp,json}', {
   query: '?url',
   import: 'default',
 }) as Record<string, () => Promise<string>>;

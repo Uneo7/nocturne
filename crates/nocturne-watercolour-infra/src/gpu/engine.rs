@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
@@ -14,7 +14,7 @@ use nocturne_watercolour_core::domain::palette::MAX_PIGMENTS;
 use nocturne_watercolour_core::domain::paper::render_pixel_scale;
 use nocturne_watercolour_core::domain::sim::{self, PigmentCoefficients, SimParams};
 use nocturne_watercolour_core::domain::{
-    Image, Operation, Paper, PaperField, Scene, Seed, SimulationGrid,
+    Image, MAX_SETTLE_SHARE, Operation, Paper, PaperField, Scene, Seed, SimulationGrid, StrokeSpan,
 };
 
 use super::context::GpuContext;
@@ -26,6 +26,25 @@ use super::surface::PresentSurface;
 /// at 256x256 with 4 pigments it admits the 64-checkpoint cap.
 pub const CHECKPOINT_BUDGET_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_CHECKPOINTS: usize = 64;
+
+/// Ticks encoded per command buffer. Windows resets the display driver when
+/// one command buffer runs past its two-second watchdog, and a tick at the
+/// 512^2 maximum is a few milliseconds on an integrated GPU, so sixteen keeps
+/// a submission two orders of magnitude inside that while still amortising
+/// the encoder over a replay.
+const TICKS_PER_SUBMIT: u32 = 16;
+
+/// Command buffers allowed in flight before a submit blocks on the oldest.
+/// Native only: the browser paces its own queue. Bounds the driver memory an
+/// unattended replay can pin, and turns a hung device into a timed-out wait
+/// instead of an ever-growing queue.
+const MAX_IN_FLIGHT_SUBMISSIONS: usize = 32;
+
+/// Output pixels per render dispatch. The optics pass reads 4x4 taps times a
+/// 3x3 presence window per pigment per pixel, so its cost grows with the
+/// canvas; a larger frame is rendered as row bands, each its own submission,
+/// so no single dispatch does.
+const RENDER_PIXELS_PER_DISPATCH: u64 = 1 << 20;
 
 const WORKGROUP: u32 = 256;
 
@@ -48,13 +67,17 @@ struct ParamsUniform {
     diffusion_depth: f32,
     deposition_rate: f32,
     lift_rate: f32,
-    shallow_boost: f32,
-    shallow_depth: f32,
+    wet_lo: f32,
+    wet_hi: f32,
+    settle_base: f32,
+    dry_deposition: f32,
+    settle_curve: f32,
     capillary_absorb: f32,
     capillary_epsilon: f32,
     capillary_sigma: f32,
     capillary_rate: f32,
     capillary_dry: f32,
+    wet_capillary_dry: f32,
     capillary_seep: f32,
     evaporation: f32,
     dry_threshold: f32,
@@ -85,13 +108,17 @@ impl ParamsUniform {
             diffusion_depth: p.diffusion_depth,
             deposition_rate: p.deposition_rate,
             lift_rate: p.lift_rate,
-            shallow_boost: p.shallow_boost,
-            shallow_depth: p.shallow_depth,
+            wet_lo: p.wet_lo,
+            wet_hi: p.wet_hi,
+            settle_base: p.settle_base,
+            dry_deposition: p.dry_deposition,
+            settle_curve: p.settle_curve,
             capillary_absorb: p.capillary_absorb,
             capillary_epsilon: p.capillary_epsilon,
             capillary_sigma: p.capillary_sigma,
             capillary_rate: p.capillary_rate,
             capillary_dry: p.capillary_dry,
+            wet_capillary_dry: p.wet_capillary_dry,
             capillary_seep: p.capillary_seep,
             evaporation: p.evaporation,
             dry_threshold: p.dry_threshold,
@@ -110,12 +137,14 @@ impl ParamsUniform {
 struct StrokeUniform {
     kind: u32,
     pigment: u32,
-    _p0: u32,
-    _p1: u32,
+    /// The laydown flow, computed on the CPU by `paint::stroke_flow` so both
+    /// engines inject the same velocity; see `paint::StrokeFlow`.
+    kick_x: f32,
+    kick_y: f32,
     concentration: f32,
     water: f32,
     strength: f32,
-    _p2: f32,
+    splat_out: f32,
 }
 
 #[repr(C)]
@@ -136,12 +165,17 @@ struct RenderUniform {
     sim_height: u32,
     pigment_count: u32,
     n: u32,
-    _p0: u32,
+    /// First output row of this dispatch's band.
+    y_offset: u32,
     _p1: u32,
     granulation_gain: f32,
     wet_pigment_visibility: f32,
     thickness_scale: f32,
+    wet_darken: f32,
+    wet_sheen_add: f32,
+    sheen_depth: f32,
     _p2: f32,
+    _p3: f32,
 }
 
 #[derive(Clone)]
@@ -211,7 +245,9 @@ struct RenderTarget {
     pixel_scale: f32,
     uniform: wgpu::Buffer,
     out: wgpu::Buffer,
-    staging: wgpu::Buffer,
+    /// Host-visible copy of `out`, created on the first readback. A
+    /// presenting instance never reads back, so it never pays for one.
+    staging: Option<wgpu::Buffer>,
     bind_group: wgpu::BindGroup,
     present_uniform: wgpu::Buffer,
     present_bind_group: wgpu::BindGroup,
@@ -227,6 +263,9 @@ pub struct GpuEngine {
     loaded: Option<Loaded>,
     next_checkpoint: u64,
     checkpoint_budget: u64,
+    /// Submissions not yet known to have completed, oldest first; see
+    /// [`MAX_IN_FLIGHT_SUBMISSIONS`].
+    in_flight: Mutex<VecDeque<wgpu::SubmissionIndex>>,
 }
 
 const COMMON: &str = include_str!("shaders/common.wgsl");
@@ -269,6 +308,14 @@ fn uniform_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
 
 fn groups(n: u32) -> u32 {
     n.div_ceil(WORKGROUP)
+}
+
+/// Rows per render band: whole 16-row workgroups holding at most
+/// [`RENDER_PIXELS_PER_DISPATCH`] pixels, never fewer than one workgroup.
+fn render_band_rows(width: u32, height: u32) -> u32 {
+    let rows = (RENDER_PIXELS_PER_DISPATCH / u64::from(width.max(1))).min(u64::from(height));
+    let whole_groups = (rows as u32 / 16) * 16;
+    whole_groups.max(16).min(height.max(1))
 }
 
 impl GpuEngine {
@@ -454,6 +501,7 @@ impl GpuEngine {
             loaded: None,
             next_checkpoint: 1,
             checkpoint_budget: CHECKPOINT_BUDGET_BYTES,
+            in_flight: Mutex::new(VecDeque::new()),
         };
         (engine, validation)
     }
@@ -473,6 +521,7 @@ impl GpuEngine {
             loaded: None,
             next_checkpoint: 1,
             checkpoint_budget: self.checkpoint_budget,
+            in_flight: Mutex::new(VecDeque::new()),
         }
     }
 
@@ -514,13 +563,66 @@ impl GpuEngine {
             .ok_or_else(|| EngineError::new("no scene loaded"))
     }
 
-    fn buffer(&self, label: &str, size: u64, usage: wgpu::BufferUsages) -> wgpu::Buffer {
-        self.ctx.device().create_buffer(&wgpu::BufferDescriptor {
+    fn render_target(&self) -> Result<&RenderTarget, EngineError> {
+        self.loaded()?
+            .render_cache
+            .as_ref()
+            .ok_or_else(|| EngineError::new("no rendered frame"))
+    }
+
+    /// Allocates a buffer, refusing one the device could not bind: wgpu
+    /// reports an oversized buffer as an uncaptured error after the fact,
+    /// which would fault the whole device for every instance sharing it.
+    fn buffer(
+        &self,
+        label: &str,
+        size: u64,
+        usage: wgpu::BufferUsages,
+    ) -> Result<wgpu::Buffer, EngineError> {
+        let limits = self.ctx.limits();
+        let size = size.max(16);
+        let cap = if usage.contains(wgpu::BufferUsages::STORAGE) {
+            limits
+                .max_buffer_size
+                .min(limits.max_storage_buffer_binding_size)
+        } else {
+            limits.max_buffer_size
+        };
+        if size > cap {
+            return Err(EngineError::new(format!(
+                "{label}: {size} bytes exceeds the device limit of {cap}"
+            )));
+        }
+        Ok(self.ctx.device().create_buffer(&wgpu::BufferDescriptor {
             label: Some(label),
-            size: size.max(16),
+            size,
             usage,
             mapped_at_creation: false,
-        })
+        }))
+    }
+
+    /// The one path every command buffer takes. Refuses a lost or faulted
+    /// device, and natively blocks on the oldest outstanding submission once
+    /// [`MAX_IN_FLIGHT_SUBMISSIONS`] are pending.
+    fn submit(&self, commands: wgpu::CommandBuffer) -> Result<(), EngineError> {
+        self.ctx.check()?;
+        let index = self.ctx.queue().submit([commands]);
+        let oldest = {
+            let mut pending = self.in_flight.lock().unwrap_or_else(|p| p.into_inner());
+            pending.push_back(index);
+            if pending.len() > MAX_IN_FLIGHT_SUBMISSIONS {
+                pending.pop_front()
+            } else {
+                None
+            }
+        };
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(oldest) = oldest {
+            self.ctx.wait_for(oldest)?;
+        }
+        #[cfg(target_arch = "wasm32")]
+        let _ = oldest;
+        Ok(())
     }
 
     /// Encodes one tick: the same pass order as `sim::step`, with scratch
@@ -612,8 +714,7 @@ impl GpuEngine {
             pass.set_bind_group(0, &l.bind_group, &[]);
             pass.dispatch_workgroups(groups(l.layout.n as u32), 1, 1);
         }
-        self.ctx.queue().submit([enc.finish()]);
-        Ok(())
+        self.submit(enc.finish())
     }
 
     fn upload_stamp(&self, stamp: &paint::Stamp, stroke: StrokeUniform) -> Result<(), EngineError> {
@@ -633,7 +734,7 @@ impl GpuEngine {
             "state-readback",
             bytes,
             wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-        );
+        )?;
         let mut enc = self
             .ctx
             .device()
@@ -641,7 +742,7 @@ impl GpuEngine {
                 label: Some("readback"),
             });
         enc.copy_buffer_to_buffer(&l.state, 0, &staging, 0, bytes);
-        self.ctx.queue().submit([enc.finish()]);
+        self.submit(enc.finish())?;
         let data = self.map_read(&staging)?;
         let floats: &[f32] = bytemuck::cast_slice(&data);
         Ok(l.layout.unpack(floats, l.width, l.height))
@@ -736,22 +837,17 @@ impl GpuEngine {
             "render-params",
             std::mem::size_of::<RenderUniform>() as u64,
             wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        );
+        )?;
         let paper_buf = self.buffer(
             "paper-out",
             pixels * 4,
             wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-        );
+        )?;
         let out = self.buffer(
             "render-out",
             pixels * 16,
             wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-        );
-        let staging = self.buffer(
-            "render-staging",
-            pixels * 16,
-            wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-        );
+        )?;
         self.ctx
             .queue()
             .write_buffer(&paper_buf, 0, bytemuck::cast_slice(&paper_out.height));
@@ -789,7 +885,7 @@ impl GpuEngine {
             "present-params",
             std::mem::size_of::<PresentUniform>() as u64,
             wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        );
+        )?;
         let present_bind_group = self
             .ctx
             .device()
@@ -813,7 +909,7 @@ impl GpuEngine {
             pixel_scale,
             uniform,
             out,
-            staging,
+            staging: None,
             bind_group,
             present_uniform,
             present_bind_group,
@@ -822,53 +918,86 @@ impl GpuEngine {
     }
 
     /// Runs the optics pass into the cached output buffer at `width` x
-    /// `height`; readback and presentation both start from here.
+    /// `height`; readback and presentation both start from here. The frame
+    /// is rendered in row bands (see [`RENDER_PIXELS_PER_DISPATCH`]); each
+    /// band's uniform write is queued ahead of its own submission, so the
+    /// bands execute in order against the same uniform buffer.
     fn render_frame(&mut self, width: u32, height: u32) -> Result<(), EngineError> {
         if width == 0 || height == 0 {
             return Err(EngineError::new("zero output size"));
         }
         self.ensure_render_target(width, height)?;
         let l = self.loaded()?;
-        let target = l.render_cache.as_ref().expect("render target ensured");
-        let uniform = RenderUniform {
-            out_width: width,
-            out_height: height,
-            sim_width: l.width,
-            sim_height: l.height,
-            pigment_count: l.layout.pigment_count as u32,
-            n: l.layout.n as u32,
-            _p0: 0,
-            _p1: 0,
-            granulation_gain: self.render_params.granulation_gain,
-            wet_pigment_visibility: self.render_params.wet_pigment_visibility,
-            thickness_scale: self.render_params.thickness_scale,
-            _p2: 0.0,
-        };
-        self.ctx
-            .queue()
-            .write_buffer(&target.uniform, 0, bytemuck::bytes_of(&uniform));
-        let mut enc = self
-            .ctx
-            .device()
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("render"),
-            });
-        {
-            let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor::default());
-            pass.set_pipeline(&self.render.pipeline);
-            pass.set_bind_group(0, &target.bind_group, &[]);
-            pass.dispatch_workgroups(width.div_ceil(16), height.div_ceil(16), 1);
+        let target = self.render_target()?;
+        let band_rows = render_band_rows(width, height);
+        let mut y_offset = 0;
+        while y_offset < height {
+            let rows = band_rows.min(height - y_offset);
+            let uniform = RenderUniform {
+                out_width: width,
+                out_height: height,
+                sim_width: l.width,
+                sim_height: l.height,
+                pigment_count: l.layout.pigment_count as u32,
+                n: l.layout.n as u32,
+                y_offset,
+                _p1: 0,
+                granulation_gain: self.render_params.granulation_gain,
+                wet_pigment_visibility: self.render_params.wet_pigment_visibility,
+                thickness_scale: self.render_params.thickness_scale,
+                wet_darken: self.render_params.wet_darken,
+                wet_sheen_add: self.render_params.wet_sheen_add,
+                sheen_depth: self.render_params.sheen_depth,
+                _p2: 0.0,
+                _p3: 0.0,
+            };
+            self.ctx
+                .queue()
+                .write_buffer(&target.uniform, 0, bytemuck::bytes_of(&uniform));
+            let mut enc =
+                self.ctx
+                    .device()
+                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: Some("render"),
+                    });
+            {
+                let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor::default());
+                pass.set_pipeline(&self.render.pipeline);
+                pass.set_bind_group(0, &target.bind_group, &[]);
+                pass.dispatch_workgroups(width.div_ceil(16), rows.div_ceil(16), 1);
+            }
+            self.submit(enc.finish())?;
+            y_offset += rows;
         }
-        self.ctx.queue().submit([enc.finish()]);
+        Ok(())
+    }
+
+    fn ensure_staging(&mut self) -> Result<(), EngineError> {
+        let target = self.render_target()?;
+        if target.staging.is_some() {
+            return Ok(());
+        }
+        let bytes = (target.width as u64) * (target.height as u64) * 16;
+        let staging = self.buffer(
+            "render-staging",
+            bytes,
+            wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        )?;
+        let target = self
+            .loaded_mut()?
+            .render_cache
+            .as_mut()
+            .ok_or_else(|| EngineError::new("no rendered frame"))?;
+        target.staging = Some(staging);
         Ok(())
     }
 
     fn copy_frame_to_staging(&self, width: u32, height: u32) -> Result<&wgpu::Buffer, EngineError> {
-        let target = self
-            .loaded()?
-            .render_cache
+        let target = self.render_target()?;
+        let staging = target
+            .staging
             .as_ref()
-            .ok_or_else(|| EngineError::new("no rendered frame"))?;
+            .ok_or_else(|| EngineError::new("no staging buffer"))?;
         let bytes = (width as u64) * (height as u64) * 16;
         let mut enc = self
             .ctx
@@ -876,14 +1005,15 @@ impl GpuEngine {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("readback"),
             });
-        enc.copy_buffer_to_buffer(&target.out, 0, &target.staging, 0, bytes);
-        self.ctx.queue().submit([enc.finish()]);
-        Ok(&target.staging)
+        enc.copy_buffer_to_buffer(&target.out, 0, staging, 0, bytes);
+        self.submit(enc.finish())?;
+        Ok(staging)
     }
 
     /// `Renderer::render` for hosts that cannot block on a buffer map.
     pub async fn render_async(&mut self, width: u32, height: u32) -> Result<Image, EngineError> {
         self.render_frame(width, height)?;
+        self.ensure_staging()?;
         let staging = self.copy_frame_to_staging(width, height)?;
         let data = self.map_read_async(staging).await?;
         let floats: &[f32] = bytemuck::cast_slice(&data);
@@ -898,9 +1028,7 @@ impl GpuEngine {
     /// `Ok(false)` means the swapchain had no texture this frame (occluded,
     /// resized underneath us); the caller simply tries again next frame.
     pub fn present(&mut self, surface: &PresentSurface) -> Result<bool, EngineError> {
-        if self.ctx.is_lost() {
-            return Err(EngineError::new("device lost"));
-        }
+        self.ctx.check()?;
         let (width, height) = surface.size();
         self.render_frame(width, height)?;
         let format = surface.format();
@@ -911,11 +1039,7 @@ impl GpuEngine {
         let Some(frame) = surface.acquire(&self.ctx)? else {
             return Ok(false);
         };
-        let target = self
-            .loaded()?
-            .render_cache
-            .as_ref()
-            .expect("render target ensured");
+        let target = self.render_target()?;
         self.ctx.queue().write_buffer(
             &target.present_uniform,
             0,
@@ -940,7 +1064,7 @@ impl GpuEngine {
                 .present
                 .cached
                 .as_ref()
-                .expect("present pipeline cached");
+                .ok_or_else(|| EngineError::new("no present pipeline"))?;
             let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("present"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -958,7 +1082,7 @@ impl GpuEngine {
             pass.set_bind_group(0, &target.present_bind_group, &[]);
             pass.draw(0..3, 0..1);
         }
-        self.ctx.queue().submit([enc.finish()]);
+        self.submit(enc.finish())?;
         self.ctx.queue().present(frame);
         Ok(true)
     }
@@ -1043,39 +1167,39 @@ impl Simulator for GpuEngine {
             wgpu::BufferUsages::STORAGE
                 | wgpu::BufferUsages::COPY_SRC
                 | wgpu::BufferUsages::COPY_DST,
-        );
+        )?;
         let scratch = self.buffer(
             "scratch",
             layout.scratch_len() as u64 * f,
             wgpu::BufferUsages::STORAGE
                 | wgpu::BufferUsages::COPY_SRC
                 | wgpu::BufferUsages::COPY_DST,
-        );
+        )?;
         let stamp = self.buffer(
             "stamp",
             layout.n as u64 * f,
             wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-        );
+        )?;
         let params = self.buffer(
             "params",
             std::mem::size_of::<ParamsUniform>() as u64,
             wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        );
+        )?;
         let stroke = self.buffer(
             "stroke",
             std::mem::size_of::<StrokeUniform>() as u64,
             wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        );
+        )?;
         let pigments = self.buffer(
             "pigments",
             (MAX_PIGMENTS * std::mem::size_of::<PigmentCoefUniform>()) as u64,
             wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-        );
+        )?;
         let optics = self.buffer(
             "optics",
             (MAX_PIGMENTS * 3 * 16) as u64,
             wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-        );
+        )?;
 
         let q = self.ctx.queue();
         q.write_buffer(&state, 0, bytemuck::cast_slice(&layout.pack(&grid)));
@@ -1170,8 +1294,8 @@ impl Simulator for GpuEngine {
                 l.paper_sim.height.clone(),
             )
         };
-        let rasterize = |path: &[_], radius, softness| {
-            paint::rasterize_path_aspect(
+        let rasterize = |path: &[_], radius, softness, span: StrokeSpan| {
+            paint::rasterize_path_span(
                 path,
                 radius,
                 softness,
@@ -1183,56 +1307,59 @@ impl Simulator for GpuEngine {
                 aspect,
                 seed,
                 stamp_params,
+                span,
             )
         };
         match op {
             Operation::Brush(s) => {
-                let stamp = rasterize(&s.path, s.radius, s.softness);
+                let stamp = rasterize(&s.path, s.radius, s.softness, s.span);
+                let flow = paint::stroke_flow(&s.path, s.span, aspect, s.water, self.params.flow);
                 self.upload_stamp(
                     &stamp,
                     StrokeUniform {
                         kind: 0,
                         pigment: s.pigment as u32,
-                        _p0: 0,
-                        _p1: 0,
+                        kick_x: flow.kick.0,
+                        kick_y: flow.kick.1,
                         concentration: s.concentration,
                         water: s.water,
                         strength: 0.0,
-                        _p2: 0.0,
+                        splat_out: flow.splat_out,
                     },
                 )?;
                 self.dispatch_apply(&self.sim.apply_brush)
             }
             Operation::Water(s) => {
-                let stamp = rasterize(&s.path, s.radius, s.softness);
+                let stamp = rasterize(&s.path, s.radius, s.softness, s.span);
+                let flow = paint::stroke_flow(&s.path, s.span, aspect, s.water, self.params.flow);
                 self.upload_stamp(
                     &stamp,
                     StrokeUniform {
                         kind: 1,
                         pigment: 0,
-                        _p0: 0,
-                        _p1: 0,
+                        kick_x: flow.kick.0,
+                        kick_y: flow.kick.1,
                         concentration: 0.0,
                         water: s.water,
                         strength: 0.0,
-                        _p2: 0.0,
+                        splat_out: flow.splat_out,
                     },
                 )?;
                 self.dispatch_apply(&self.sim.apply_water)
             }
             Operation::Lift(s) => {
-                let stamp = rasterize(&s.path, s.radius, s.softness);
+                let stamp = rasterize(&s.path, s.radius, s.softness, s.span);
                 self.upload_stamp(
                     &stamp,
                     StrokeUniform {
                         kind: 2,
                         pigment: 0,
-                        _p0: 0,
-                        _p1: 0,
+                        kick_x: 0.0,
+                        kick_y: 0.0,
                         concentration: 0.0,
                         water: 0.0,
                         strength: s.strength,
-                        _p2: 0.0,
+                        splat_out: 0.0,
                     },
                 )?;
                 self.dispatch_apply(&self.sim.apply_lift)
@@ -1240,6 +1367,10 @@ impl Simulator for GpuEngine {
             Operation::Dry { rate } => {
                 let off = self.loaded()?.layout.dry_rate();
                 self.write_state_region(off, &[rate.clamp(0.0, 64.0)])
+            }
+            Operation::Settle { share } => {
+                let off = self.loaded()?.layout.settle_share();
+                self.write_state_region(off, &[share.clamp(0.0, MAX_SETTLE_SHARE)])
             }
             Operation::DryAll => self.dispatch_apply(&self.sim.dry_all),
             Operation::SetMask(mask) => {
@@ -1266,10 +1397,9 @@ impl Simulator for GpuEngine {
             return Ok(());
         }
         let l = self.loaded()?;
-        // Bounded encoder size keeps driver memory flat on long replays.
         let mut remaining = ticks;
         while remaining > 0 {
-            let batch = remaining.min(64);
+            let batch = remaining.min(TICKS_PER_SUBMIT);
             let mut enc =
                 self.ctx
                     .device()
@@ -1279,7 +1409,7 @@ impl Simulator for GpuEngine {
             for _ in 0..batch {
                 self.encode_tick(&mut enc, l);
             }
-            self.ctx.queue().submit([enc.finish()]);
+            self.submit(enc.finish())?;
             remaining -= batch;
         }
         Ok(())
@@ -1296,7 +1426,7 @@ impl Simulator for GpuEngine {
             "checkpoint",
             bytes,
             wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
-        );
+        )?;
         let mut enc = self
             .ctx
             .device()
@@ -1304,7 +1434,7 @@ impl Simulator for GpuEngine {
                 label: Some("snapshot"),
             });
         enc.copy_buffer_to_buffer(&l.state, 0, &copy, 0, bytes);
-        self.ctx.queue().submit([enc.finish()]);
+        self.submit(enc.finish())?;
         let id = CheckpointId(self.next_checkpoint);
         self.next_checkpoint += 1;
         self.loaded_mut()?.checkpoints.insert(id, copy);
@@ -1324,8 +1454,7 @@ impl Simulator for GpuEngine {
                 label: Some("restore"),
             });
         enc.copy_buffer_to_buffer(src, 0, &l.state, 0, l.layout.state_bytes());
-        self.ctx.queue().submit([enc.finish()]);
-        Ok(())
+        self.submit(enc.finish())
     }
 
     fn release(&mut self, id: CheckpointId) {
@@ -1346,6 +1475,7 @@ impl Simulator for GpuEngine {
 impl Renderer for GpuEngine {
     fn render(&mut self, width: u32, height: u32) -> Result<Image, EngineError> {
         self.render_frame(width, height)?;
+        self.ensure_staging()?;
         let staging = self.copy_frame_to_staging(width, height)?;
         let data = self.map_read(staging)?;
         let floats: &[f32] = bytemuck::cast_slice(&data);

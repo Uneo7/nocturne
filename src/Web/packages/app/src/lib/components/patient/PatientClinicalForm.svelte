@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { Scale } from "@lucide/svelte";
   import { Input } from "$lib/components/ui/input";
   import * as Select from "$lib/components/ui/select";
   import { FormField } from "$lib/forms";
@@ -6,7 +7,7 @@
   import { diabetesTypeLabels, biologicalSexLabels } from "./labels";
   import { ClinicalState } from "./state.svelte";
   import TimezoneCombobox from "./TimezoneCombobox.svelte";
-
+    
   interface Props {
     onstate?: (state: ClinicalState) => void;
   }
@@ -194,14 +195,17 @@
       issues={clinical.weight.saveError}
     >
       {#snippet control(field)}
-        <Input
-          {...field}
-          type="number"
-          step="0.1"
-          min="0"
-          bind:value={clinical.weight.weightKg}
-          placeholder="e.g. 70"
-        />
+        <div class="flex items-center gap-2">
+          <Scale class="size-6 shrink-0 text-emerald-500" />
+          <Input
+            {...field}
+            type="number"
+            step="0.1"
+            min="0"
+            bind:value={clinical.weight.weightKg}
+            placeholder="e.g. 70"
+          />
+        </div>
       {/snippet}
     </FormField>
   </div>

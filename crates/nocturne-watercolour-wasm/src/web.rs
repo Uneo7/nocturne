@@ -8,6 +8,7 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
+use nocturne_watercolour_core::application::playback::DEFAULT_PAINT_WALL_FRACTION;
 use nocturne_watercolour_core::application::{
     EngineError, Exporter, Playback, PlaybackState, ProgressCurve,
 };
@@ -56,6 +57,20 @@ fn js_err(code: &str, detail: impl std::fmt::Display) -> JsError {
 
 fn engine_err(e: EngineError) -> JsError {
     js_err("Engine", e)
+}
+
+/// A lost device crosses as `DeviceLost`, which the host answers by tearing
+/// the engine down; a device that reported an error (validation, out of
+/// memory) crosses as `Engine`, so the instance that hit it falls back while
+/// the host keeps its device.
+fn guard_device(ctx: &GpuContext) -> Result<(), JsError> {
+    if ctx.is_lost() {
+        return Err(js_err("DeviceLost", "the GPU device was lost"));
+    }
+    if let Some(fault) = ctx.fault() {
+        return Err(js_err("Engine", format!("device error: {fault}")));
+    }
+    Ok(())
 }
 
 #[derive(Default)]
@@ -111,17 +126,20 @@ impl WatercolourEngine {
     /// it. Throws `InstanceLimit` once `maxLiveInstances` are alive.
     /// `settle_fraction` (0 = unchanged) lengthens the reveal's drying tail:
     /// the last fraction of the ticks then run at the raised evaporation
-    /// rate (`scene_tools::apply_settle_fraction`).
+    /// rate (`scene_tools::apply_settle_fraction`). `paint_wall_fraction`
+    /// (0 = keep the default) is the share of the wall clock the brushwork
+    /// gets: the playback's curve becomes `ProgressCurve::reveal_for(scene,
+    /// paint_wall_fraction)`, so the tail covers the settling after the pen
+    /// leaves the paper.
     #[wasm_bindgen(js_name = createInstance)]
     pub fn create_instance(
         &self,
         scene_json: &str,
         duration_ms: f64,
         settle_fraction: f64,
+        paint_wall_fraction: f64,
     ) -> Result<SceneInstance, JsError> {
-        if self.ctx.is_lost() {
-            return Err(js_err("DeviceLost", "the GPU device was lost"));
-        }
+        guard_device(&self.ctx)?;
         if self.shared.live.get() >= self.shared.max_live.get() {
             return Err(js_err(
                 "InstanceLimit",
@@ -135,8 +153,14 @@ impl WatercolourEngine {
         if settle_fraction.is_finite() && settle_fraction > 0.0 {
             scene_tools::apply_settle_fraction(&mut scene, settle_fraction as f32);
         }
-        let playback = Playback::new(self.template.fork(), scene, duration_ms as f32)
+        let mut playback = Playback::new(self.template.fork(), scene, duration_ms as f32)
             .map_err(|e| js_err("InvalidScene", e))?;
+        if paint_wall_fraction.is_finite() && paint_wall_fraction > 0.0 {
+            playback.set_progress_curve(ProgressCurve::reveal_for(
+                playback.scene(),
+                paint_wall_fraction as f32,
+            ));
+        }
         self.shared.live.set(self.shared.live.get() + 1);
         let mut instance = SceneInstance {
             playback,
@@ -244,6 +268,56 @@ pub fn catalogue_ids() -> Vec<String> {
     scene_tools::catalogue_ids()
 }
 
+/// Scene JSON for a Lucide icon. `elements` is the icon element list as JSON
+/// (the array a `lucide` `IconNode` serialises to); `name` becomes the scene
+/// id (`lucide-<name>-<palette>-<seed>`). `hints_json` is the per-icon tuning
+/// (`""` keeps the defaults; camelCase fields). The remaining arguments are as
+/// [`catalogue_scene`].
+#[allow(clippy::too_many_arguments)]
+#[wasm_bindgen(js_name = iconScene)]
+pub fn icon_scene(
+    elements_json: &str,
+    name: &str,
+    seed: f64,
+    palette: &str,
+    intensity: f32,
+    detail: &str,
+    surface: &str,
+    sim_resolution: f64,
+    hints_json: &str,
+) -> Result<String, JsError> {
+    let seed = Seed(if seed.is_finite() {
+        seed.max(0.0) as u64
+    } else {
+        0
+    });
+    let detail = scene_tools::parse_detail(detail).ok_or_else(|| {
+        js_err(
+            "InvalidDetail",
+            format!("{detail:?} is not small|medium|large|extralarge"),
+        )
+    })?;
+    let surface = Surface::parse(surface)
+        .ok_or_else(|| js_err("InvalidSurface", format!("{surface:?} is not light|dark")))?;
+    let sim = if sim_resolution.is_finite() && sim_resolution > 0.0 {
+        Some(sim_resolution as u32)
+    } else {
+        None
+    };
+    scene_tools::icon_scene_json(
+        elements_json,
+        name,
+        seed,
+        palette,
+        intensity,
+        detail,
+        surface,
+        sim,
+        hints_json,
+    )
+    .map_err(|e| JsError::new(&e.to_string()))
+}
+
 #[wasm_bindgen(js_name = bakedManifest)]
 pub fn baked_manifest(frames: u32, width: u32, height: u32, duration_ms: u32) -> String {
     BakedManifest::vertical(frames, width, height, duration_ms).to_json()
@@ -269,10 +343,7 @@ impl SceneInstance {
     }
 
     fn guard_device(&self) -> Result<(), JsError> {
-        if self.ctx.is_lost() {
-            return Err(js_err("DeviceLost", "the GPU device was lost"));
-        }
-        Ok(())
+        guard_device(&self.ctx)
     }
 
     fn timed_step(
@@ -404,16 +475,20 @@ impl SceneInstance {
     }
 
     /// Swaps the curve `advanceByElapsed`/`seekProgress` map progress with;
-    /// `frontLoaded` (default) or `linear`.
+    /// `frontLoaded` (default), `linear` or `reveal` (the scene's own
+    /// wall-clock paint/settle split at the default paint fraction).
     #[wasm_bindgen(js_name = setProgressCurve)]
     pub fn set_progress_curve(&mut self, curve: &str) -> Result<(), JsError> {
         let curve = match curve {
             "frontLoaded" | "front-loaded" => ProgressCurve::FrontLoaded,
             "linear" => ProgressCurve::Linear,
+            "reveal" => {
+                ProgressCurve::reveal_for(self.playback.scene(), DEFAULT_PAINT_WALL_FRACTION)
+            }
             other => {
                 return Err(js_err(
                     "InvalidCurve",
-                    format!("{other:?} is not frontLoaded|linear"),
+                    format!("{other:?} is not frontLoaded|linear|reveal"),
                 ));
             }
         };

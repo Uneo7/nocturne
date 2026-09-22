@@ -119,6 +119,33 @@ is `aria-hidden` with `role="presentation"`. The player is created in an effect
 and disposed on destroy or when any prop changes. It maps props to
 `createArtworkPlayer` options and nothing else.
 
+## Paint drops
+
+`DropSurface` wraps arbitrary content and paints abstract marks in the space
+**around** it on hover, selection or focus; `DropGroup` stops a run of them
+repeating itself. The marks are placed by ink rather than by element box, the
+copy is measured off the DOM with `@chenglou/pretext`, and a baked mark arrives
+through a radial mask spreading from where the brush touched down.
+
+```svelte
+<DropGroup name="feature cards">
+  <DropSurface
+    name="Your server, your data"
+    fonts={{ title: { font: '600 14px "Cabin", sans-serif', lineHeight: 20 } }}
+    class="rounded-xl border bg-card"
+    contentClass="flex items-start gap-3 p-4"
+  >
+    <div data-drop-obstacle><Icon /></div>
+    <h3 data-drop-text="title" class="text-sm font-semibold">Your server, your data</h3>
+  </DropSurface>
+</DropGroup>
+```
+
+The full contract - the three-layer stack, the placement rules, the reveal
+curves and both colour directions - is in
+[`docs/watercolour/public-api.md`](../../../docs/watercolour/public-api.md#paint-drops).
+`/drops` in the showcase is the working reference.
+
 ## Modes and fallbacks
 
 | Mode | Draws with | Needs | When chosen (`mode: 'auto'`) |

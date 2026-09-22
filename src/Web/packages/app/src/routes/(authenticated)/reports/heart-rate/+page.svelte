@@ -15,7 +15,7 @@
   } from "$lib/components/actogram";
   import { MS_PER_HOUR } from "$lib/components/actogram/actogram";
   import { useActogramReport } from "$lib/hooks/actogram-report.svelte";
-
+  
   const VISIBLE_DAYS = 14;
 
   const report = useActogramReport("Error Loading Heart Rate Report");

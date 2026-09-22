@@ -1,5 +1,7 @@
 //! GPU backend tests. Each returns early with a note when no adapter exists.
 
+use std::sync::OnceLock;
+
 use nocturne_watercolour_core::application::{
     CheckpointPolicy, CpuEngine, Playback, Renderer, Simulator,
 };
@@ -15,9 +17,16 @@ use nocturne_watercolour_infra::gpu::{GpuContext, GpuEngine};
 /// transcendental rounding that compounds over ~300 ticks.
 const CPU_GPU_MAE_TOLERANCE: f32 = 0.01;
 
+/// One device for the whole binary: the harness runs tests on parallel
+/// threads, and a device per test would open one per thread against the
+/// same adapter.
+static CONTEXT: OnceLock<Option<GpuContext>> = OnceLock::new();
+
 fn gpu() -> Option<GpuEngine> {
-    match GpuContext::try_new().expect("context creation must not error") {
-        Some(ctx) => Some(GpuEngine::new(ctx).expect("engine")),
+    let ctx =
+        CONTEXT.get_or_init(|| GpuContext::try_new().expect("context creation must not error"));
+    match ctx {
+        Some(ctx) => Some(GpuEngine::new(ctx.clone()).expect("engine")),
         None => {
             eprintln!("skipping: no GPU adapter");
             None
@@ -48,12 +57,11 @@ fn seeded_replay_is_bit_identical_on_the_same_device() {
     assert_eq!(img_a.rgba, img_b.rgba);
 }
 
-fn assert_gpu_matches_cpu(gpu: GpuEngine, scene: Scene) {
-    let mut g = Playback::new(gpu, scene.clone(), 1000.0).unwrap();
-    g.finish_immediately().unwrap();
+/// Compares the GPU and CPU engines' current state: the rendered 256x256
+/// frame and the deposited-pigment grid, at the shared tolerance, with the
+/// diagnostics the lockstep run prints at every checkpoint.
+fn compare_engine_pair(g: &mut Playback<GpuEngine>, c: &mut Playback<CpuEngine>, label: &str) {
     let gpu_img = g.simulator().render(256, 256).unwrap();
-    let mut c = Playback::new(CpuEngine::default(), scene, 1000.0).unwrap();
-    c.finish_immediately().unwrap();
     let cpu_img = c.simulator().render(256, 256).unwrap();
     let mae = gpu_img.mean_abs_diff(&cpu_img).unwrap();
     let (worst_i, worst) = gpu_img
@@ -82,7 +90,8 @@ fn assert_gpu_matches_cpu(gpu: GpuEngine, scene: Scene) {
         .filter(|(a, b)| a[3] - b[3] > 0.5)
         .count();
     eprintln!(
-        "pixels with |dAlpha| > 0.5: {} (gpu higher in {gpu_more}); first few: {:?}",
+        "[{label} tick {}] pixels with |dAlpha| > 0.5: {} (gpu higher in {gpu_more}); first few: {:?}",
+        g.current_tick(),
         big_alpha.len(),
         big_alpha
             .iter()
@@ -91,14 +100,14 @@ fn assert_gpu_matches_cpu(gpu: GpuEngine, scene: Scene) {
             .collect::<Vec<_>>()
     );
     eprintln!(
-        "cpu/gpu mae {mae}; worst {worst} at pixel ({}, {}) channel {}: gpu {:?} cpu {:?}",
+        "[{label}] cpu/gpu mae {mae}; worst {worst} at pixel ({}, {}) channel {}: gpu {:?} cpu {:?}",
         px % gpu_img.width as usize,
         px / gpu_img.width as usize,
         worst_i % 4,
         &gpu_img.rgba[px * 4..px * 4 + 4],
         &cpu_img.rgba[px * 4..px * 4 + 4]
     );
-    assert!(mae < CPU_GPU_MAE_TOLERANCE, "mae {mae}");
+    assert!(mae < CPU_GPU_MAE_TOLERANCE, "[{label}] mae {mae}");
     let gpu_grid = g.simulator().read_grid().unwrap();
     let cpu_grid = c.simulator().grid().unwrap();
     let grid_mae: f32 = gpu_grid
@@ -108,8 +117,36 @@ fn assert_gpu_matches_cpu(gpu: GpuEngine, scene: Scene) {
         .map(|(a, b)| (a - b).abs())
         .sum::<f32>()
         / gpu_grid.pigments_deposited.len() as f32;
-    eprintln!("deposited pigment mae {grid_mae}");
-    assert!(grid_mae < CPU_GPU_MAE_TOLERANCE);
+    eprintln!("[{label}] deposited pigment mae {grid_mae}");
+    assert!(
+        grid_mae < CPU_GPU_MAE_TOLERANCE,
+        "[{label}] grid mae {grid_mae}"
+    );
+}
+
+fn assert_gpu_matches_cpu(gpu: GpuEngine, scene: Scene) {
+    let mut g = Playback::new(gpu, scene.clone(), 1000.0).unwrap();
+    let mut c = Playback::new(CpuEngine::default(), scene, 1000.0).unwrap();
+    // Step both engines in lockstep through the timeline and compare along
+    // the run, not just at the end: the final frame alone would pass however
+    // far the two ports drift, because the timeline's implicit DryAll drives
+    // both to the same fully dry state before the comparison, and the browser
+    // runs the GPU port. The intermediate ticks land inside the drying tail.
+    let total = c.total_ticks();
+    let mut prev = 0u32;
+    for &frac in &[0.25, 0.5, 0.75] {
+        let target = (total as f32 * frac).round() as u32;
+        let delta = target.saturating_sub(prev);
+        if delta > 0 {
+            g.advance_ticks(delta).unwrap();
+            c.advance_ticks(delta).unwrap();
+            prev = target;
+        }
+        compare_engine_pair(&mut g, &mut c, "intermediate");
+    }
+    g.finish_immediately().unwrap();
+    c.finish_immediately().unwrap();
+    compare_engine_pair(&mut g, &mut c, "final");
 }
 
 #[test]
@@ -170,7 +207,10 @@ fn checkpoint_seek_equals_straight_replay() {
 
     let mut seeking = Playback::new(gpu, scene, 1000.0)
         .unwrap()
-        .with_policy(CheckpointPolicy { every_ticks: 16 });
+        .with_policy(CheckpointPolicy {
+            every_ticks: 16,
+            ..Default::default()
+        });
     seeking.advance_ticks(150).unwrap();
     seeking.seek_tick(70).unwrap();
     seeking.advance_ticks(30).unwrap();
@@ -193,4 +233,56 @@ fn checkpoint_capacity_is_bounded_and_releasable() {
     assert_eq!(gpu.snapshot().unwrap(), None);
     gpu.release(ids[0]);
     assert!(gpu.snapshot().unwrap().is_some());
+}
+
+/// Largest per-cell velocity difference tolerated between the two ports.
+/// Both inject the same `paint::StrokeFlow` off the same uploaded stamp, so
+/// the residual is float rounding, not a difference in the rule.
+const CPU_GPU_VELOCITY_TOLERANCE: f32 = 1e-4;
+
+/// The velocity a laydown injects is compared where it is written, not in the
+/// picture.
+///
+/// A rendered frame is a poor witness for it: velocity reaches the image only
+/// after advection has carried pigment around, by which point a wrong sign is
+/// a few hundredths of alpha and sits inside
+/// [`CPU_GPU_MAE_TOLERANCE`]. Flipping the sign of the outward push in
+/// `apply.wgsl` leaves `gpu_matches_cpu_reference_within_tolerance` green and
+/// fails this.
+#[test]
+fn gpu_matches_cpu_on_the_velocity_a_stroke_injects() {
+    let Some(gpu) = gpu() else { return };
+    let scene = small_scene("crescent_moon");
+    let mut g = Playback::new(gpu, scene.clone(), 1000.0).unwrap();
+    let mut c = Playback::new(CpuEngine::default(), scene, 1000.0).unwrap();
+    // Far enough in that several spans have been laid and the film is moving,
+    // early enough that the sheet has not dried and zeroed the field.
+    g.advance_ticks(30).unwrap();
+    c.advance_ticks(30).unwrap();
+
+    let gpu_grid = g.simulator().read_grid().unwrap();
+    let cpu = c.simulator();
+    let cpu_grid = cpu.grid().expect("cpu grid");
+
+    let peak = cpu_grid
+        .velocity_u
+        .iter()
+        .chain(&cpu_grid.velocity_v)
+        .fold(0.0f32, |m, v| m.max(v.abs()));
+    assert!(
+        peak > 1e-3,
+        "nothing was moving, so this test proves nothing (peak speed {peak})"
+    );
+
+    let worst = gpu_grid
+        .velocity_u
+        .iter()
+        .zip(&cpu_grid.velocity_u)
+        .chain(gpu_grid.velocity_v.iter().zip(&cpu_grid.velocity_v))
+        .map(|(a, b)| (a - b).abs())
+        .fold(0.0f32, f32::max);
+    assert!(
+        worst <= CPU_GPU_VELOCITY_TOLERANCE,
+        "the two ports inject different velocity: worst cell differs by {worst}"
+    );
 }

@@ -74,7 +74,7 @@
     Timer,
     Eye,
   } from "lucide-svelte";
-  import SettingsPageSkeleton from "$lib/components/settings/SettingsPageSkeleton.svelte";
+    import SettingsPageSkeleton from "$lib/components/settings/SettingsPageSkeleton.svelte";
   import { browser } from "$app/environment";
   import { resolve } from "$app/paths";
   import { WidgetId } from "$lib/api/generated/nocturne-api-client";
@@ -195,7 +195,7 @@
   <!-- Header -->
   <div class="flex items-center gap-3">
     <div class="flex h-12 w-12 items-center justify-center rounded-xl bg-primary/10">
-      <Palette class="h-6 w-6 text-primary" />
+      <Palette class="size-6 text-primary" />
     </div>
     <div>
       <h1 class="text-2xl font-bold tracking-tight">Appearance</h1>

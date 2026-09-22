@@ -38,6 +38,7 @@
   import { SleepSource } from "$api";
   import { useSearchParams } from "runed/kit";
   import { z } from "zod";
+  import { Artwork } from "@nocturne/watercolour";
 
   const VISIBLE_DAYS = 14;
 
@@ -223,14 +224,17 @@
     </p>
   </div>
 
+
   {#if fullyEmpty}
     <Card>
       <CardContent class="p-12 text-center">
-        <div
-          class="mx-auto mb-4 flex h-20 w-20 items-center justify-center rounded-full bg-muted"
-        >
-          <Moon class="h-10 w-10 text-muted-foreground" />
-        </div>
+        <Artwork
+          artwork="crescent-moon"
+          palette="moonlight"
+          motion="auto"
+          autoplay="once"
+          class="mx-auto mb-4 size-48"
+        />
         <h2 class="mb-2 text-xl font-semibold">No sleep data</h2>
         <p class="mx-auto max-w-md text-muted-foreground">
           Sleep sessions arrive from connected sources (Apple Health, Health

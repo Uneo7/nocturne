@@ -13,7 +13,7 @@
   import BiometricsCard from "$lib/components/reports/sleep/single-night/BiometricsCard.svelte";
   import { formatMinutesDuration } from "$lib/utils/duration";
   import { bg, bgLabel, formatLocale, time, toDate } from "$lib/utils/formatting";
-
+  
   const date = $derived(page.params.date ?? "");
 
   const nightResource = contextResource(() => getSingleNightByDate(date), {
@@ -98,6 +98,7 @@
         <p class="text-muted-foreground tabular-nums">{subtitle}</p>
       {/if}
     </div>
+
 
     <!-- Tile row -->
     <div class="grid grid-cols-2 gap-4 @lg:grid-cols-4">

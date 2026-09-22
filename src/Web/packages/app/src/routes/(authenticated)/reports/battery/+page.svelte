@@ -28,6 +28,8 @@
   import { requireDateParamsContext } from "$lib/hooks/date-params.svelte";
   import { contextResource } from "$lib/hooks/resource-context.svelte";
   import { formatMinutesDuration } from "$lib/utils/duration";
+  import { Artwork } from "@nocturne/watercolour";
+  import { batteryArtwork } from "$lib/watercolour-icons";
 
   // Get shared date params from context (set by reports layout)
   // Default: 7 days is good for battery analysis (typical charge cycle period)
@@ -132,6 +134,7 @@
     </Button>
   </div>
 
+
   <!-- Date Range Info -->
   <div class="flex items-center gap-2 text-sm text-muted-foreground">
     <Calendar class="h-4 w-4" />
@@ -148,7 +151,13 @@
     <Card>
       <CardContent class="pt-6">
         <div class="text-center py-8">
-          <Battery class="h-12 w-12 text-muted-foreground mx-auto mb-4" />
+          <Artwork
+            icon={batteryArtwork}
+            palette="water"
+            motion="auto"
+            autoplay="once"
+            class="mx-auto mb-4 size-48"
+          />
           <h3 class="text-lg font-medium">No Battery Data Available</h3>
           <p class="text-sm text-muted-foreground mt-2">
             Battery data is collected from devices that report uploader status.

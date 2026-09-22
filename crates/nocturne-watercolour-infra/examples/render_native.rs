@@ -31,6 +31,7 @@ use nocturne_watercolour_core::domain::paper::render_pixel_scale;
 use nocturne_watercolour_core::domain::{
     Background, BrushStroke, CompositeMode, Image, Operation, Palette, Paper, PaperField,
     PigmentRole, Point, RadiusProfile, Rgb, Scene, SceneId, Seed, SimResolution, SizeHint,
+    StrokeSpan,
 };
 use nocturne_watercolour_infra::authoring::{ArtworkCatalogue, DetailLevel};
 use nocturne_watercolour_infra::export::{FrameSequence, PngExporter, srgb_to_linear};
@@ -88,6 +89,7 @@ fn luminous_probe_scene(seed: Seed) -> Scene {
             concentration: *conc,
             water: *water,
             softness: 0.25,
+            span: StrokeSpan::FULL,
         }));
     }
     Scene {

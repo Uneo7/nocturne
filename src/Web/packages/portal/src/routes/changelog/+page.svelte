@@ -1,9 +1,9 @@
 <script lang="ts">
+    import { Artwork } from "@nocturne/watercolour";
     import { getChangelog, type ChangelogRelease } from "$lib/data/portal";
     import { Button } from "@nocturne/ui/ui/button";
     import { marked } from "marked";
     import {
-        Tag,
         ExternalLink,
         Loader2,
         AlertCircle,
@@ -87,6 +87,13 @@
 <div class="container mx-auto px-4 py-12">
     <!-- Hero -->
     <div class="text-center mb-12">
+        <Artwork
+            artwork="sunrise"
+            palette="ember"
+            motion="auto"
+            autoplay="once"
+            class="mx-auto mb-4 size-48 sm:size-56 lg:size-64"
+        />
         <h1 class="text-4xl md:text-5xl font-bold tracking-tight mb-4">
             Changelog
         </h1>
@@ -136,9 +143,7 @@
         </div>
     {:else if releases.length === 0}
         <div class="flex flex-col items-center justify-center py-20">
-            <div class="w-16 h-16 rounded-full bg-muted flex items-center justify-center mb-4">
-                <Tag class="w-8 h-8 text-muted-foreground" />
-            </div>
+            <Artwork artwork="report-pages" palette="slate" motion="auto" autoplay="once" class="mb-4 size-48" />
             <p class="text-muted-foreground">No releases found</p>
         </div>
     {:else}

@@ -23,13 +23,17 @@ struct Params {
     diffusion_depth: f32,
     deposition_rate: f32,
     lift_rate: f32,
-    shallow_boost: f32,
-    shallow_depth: f32,
+    wet_lo: f32,
+    wet_hi: f32,
+    settle_base: f32,
+    dry_deposition: f32,
+    settle_curve: f32,
     capillary_absorb: f32,
     capillary_epsilon: f32,
     capillary_sigma: f32,
     capillary_rate: f32,
     capillary_dry: f32,
+    wet_capillary_dry: f32,
     capillary_seep: f32,
     evaporation: f32,
     dry_threshold: f32,
@@ -44,12 +48,12 @@ struct Params {
 struct Stroke {
     kind: u32,
     pigment: u32,
-    _p0: u32,
-    _p1: u32,
+    kick_x: f32,
+    kick_y: f32,
     concentration: f32,
     water: f32,
     strength: f32,
-    _p2: f32,
+    splat_out: f32,
 };
 
 struct PigmentCoef {
@@ -88,6 +92,7 @@ fn o_m() -> u32 { return 7u * P.n; }
 fn o_g(k: u32) -> u32 { return (8u + k) * P.n; }
 fn o_d(k: u32) -> u32 { return (8u + P.pigment_count + k) * P.n; }
 fn o_dry_rate() -> u32 { return (8u + 2u * P.pigment_count) * P.n; }
+fn o_settle_share() -> u32 { return o_dry_rate() + 3u; }
 
 // scratch layout
 fn so_u() -> u32 { return 0u; }

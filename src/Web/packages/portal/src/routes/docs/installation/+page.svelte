@@ -1,14 +1,18 @@
 <script lang="ts">
+  import { ArtworkHero } from "@nocturne/watercolour";
   import {
     ArrowRight,
     Cloud,
+    CloudCog,
     Database,
     Globe,
-    Network,
     ChevronDown,
     ExternalLink,
     MapPin,
+    Network,
+    Server,
   } from "@lucide/svelte";
+   import { DOCS_HERO } from "$lib/data/docs-artwork";
   import SystemRequirements from "$lib/components/docs/SystemRequirements.svelte";
   import PikaPodsVoteCard from "$lib/components/PikaPodsVoteCard.svelte";
 
@@ -33,9 +37,19 @@
         "The official managed Nocturne instance, run by the creator of the project. Automatic updates, daily backups, and zero maintenance. Just connect your CGM and go.",
     },
   ]);
+
+    const hero = DOCS_HERO["installation"];
 </script>
 
 <div class="max-w-3xl">
+  <ArtworkHero
+        artwork={hero.artwork}
+        palette={hero.palette}
+        motion="auto"
+        autoplay="once"
+        size={400}
+        wrap={hero.wrap ?? true}
+    />
   <h1 class="text-4xl font-bold tracking-tight mb-4">Installation Guide</h1>
   <p class="text-lg text-muted-foreground mb-8">
     Choose a deployment method below to get Nocturne running on your
@@ -45,7 +59,10 @@
   <h2 class="text-2xl font-bold mt-8 mb-4">System Requirements</h2>
   <SystemRequirements />
 
-  <h2 class="text-2xl font-bold mt-8 mb-4">Choose Your Platform</h2>
+  <div class="flex items-center gap-3 mt-8 mb-4">
+    <Server class="size-7 shrink-0 text-muted-foreground" />
+    <h2 class="text-2xl font-bold">Choose Your Platform</h2>
+  </div>
   <div class="grid gap-4 not-prose">
     <a
       href="/docs/installation/docker-compose"
@@ -117,7 +134,7 @@
         <div
           class="w-12 h-12 rounded-lg bg-red-500/15 flex items-center justify-center shrink-0"
         >
-          <Cloud class="w-7 h-7 text-red-600" />
+          <Cloud class="size-6 text-red-500" />
         </div>
         <div class="flex-1">
           <h3
@@ -144,7 +161,7 @@
         <div
           class="w-12 h-12 rounded-lg bg-emerald-500/15 flex items-center justify-center shrink-0"
         >
-          <Database class="w-6 h-6 text-emerald-500" />
+          <Database class="size-6 text-emerald-500" />
         </div>
         <div class="flex-1">
           <h3
@@ -172,7 +189,7 @@
         <div
           class="w-12 h-12 rounded-lg bg-sky-500/15 flex items-center justify-center shrink-0"
         >
-          <Network class="w-6 h-6 text-sky-500" />
+          <Network class="size-6 text-sky-500" />
         </div>
         <div class="flex-1">
           <h3
@@ -196,7 +213,7 @@
         <div
           class="w-12 h-12 rounded-lg bg-purple-500/15 flex items-center justify-center shrink-0"
         >
-          <Cloud class="w-6 h-6 text-purple-500" />
+          <CloudCog class="size-6 text-purple-500" />
         </div>
         <div class="flex-1">
           <h3 class="text-lg font-semibold mb-1">Cloud Providers</h3>

@@ -1,4 +1,5 @@
 <script lang="ts">
+    import { Artwork } from "@nocturne/watercolour";
     import { Button } from "@nocturne/ui/ui/button";
     import { ArrowRight, Play } from "@lucide/svelte";
     import { DEMO_ENABLED } from "$lib/config";
@@ -66,7 +67,7 @@
                 self-hosted dashboard. Real-time, multitenant, open source, and
                 built by the diabetes community.
             </p>
-            <div class="flex flex-wrap gap-3 justify-center pointer-events-auto">
+            <div class="flex flex-wrap items-center gap-3 justify-center pointer-events-auto">
                 <Button href="/docs/installation" size="lg" class="gap-2 text-base hero-btn-primary">
                     Get started <ArrowRight class="w-4 h-4" />
                 </Button>
@@ -156,9 +157,18 @@
 
 <!-- 04 Install -->
 <section class="max-w-[1200px] mx-auto px-6 py-20 border-t border-border">
-    <div class="mb-[52px]">
-        <div class="font-brand text-[12px] font-bold tracking-[0.14em] uppercase text-muted-foreground mb-4">04 &middot; Run it tonight</div>
-        <h2 class="text-[clamp(1.6rem,3.5vw,2.5rem)] font-bold leading-[1.2] tracking-[-0.02em] text-foreground m-0">Two files and a domain name. <em class="text-glucose-in-range">That's the install.</em></h2>
+    <div class="mb-[52px] flex items-center justify-between gap-8">
+        <div>
+            <div class="font-brand text-[12px] font-bold tracking-[0.14em] uppercase text-muted-foreground mb-4">04 &middot; Run it tonight</div>
+            <h2 class="text-[clamp(1.6rem,3.5vw,2.5rem)] font-bold leading-[1.2] tracking-[-0.02em] text-foreground m-0">Two files and a domain name. <em class="text-glucose-in-range">That's the install.</em></h2>
+        </div>
+        <Artwork
+            artwork="key"
+            palette="ember"
+            motion="auto"
+            autoplay="once"
+            class="hidden size-[200px] shrink-0 lg:block xl:size-[240px]"
+        />
     </div>
 
     <div class="bg-[oklch(0.10_0.025_261)] border border-border rounded-xl overflow-hidden mb-9 max-w-[680px]">

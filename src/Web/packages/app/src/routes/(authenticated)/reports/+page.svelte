@@ -1,4 +1,5 @@
 <script lang="ts" module>
+  import { Flag } from "@lucide/svelte";
   import { tv, type VariantProps } from "tailwind-variants";
 
   export const categoryVariants = tv({
@@ -226,13 +227,6 @@
           <p class="mt-3 text-lg text-muted-foreground">
             {formatNumber(entries.length)} readings analyzed
           </p>
-          <Artwork
-            artwork="header-motif"
-            palette="moonlight"
-            motion="auto"
-            autoplay="once"
-            class="mx-auto mt-4 hidden h-8 w-40 md:block"
-          />
         </div>
 
         {#if analysis}
@@ -415,11 +409,13 @@
             class="rounded-3xl bg-white p-12 text-center shadow-lg dark:bg-slate-900"
             in:fade={{ duration: 400 }}
           >
-            <div
-              class="mx-auto mb-4 flex h-20 w-20 items-center justify-center rounded-full bg-amber-100 dark:bg-amber-900/30"
-            >
-              <AlertTriangle class="h-10 w-10 text-amber-500" />
-            </div>
+            <Artwork
+              artwork="report-pages"
+              palette="slate"
+              motion="auto"
+              autoplay="once"
+              class="mx-auto mb-4 size-48"
+            />
             <h2 class="mb-2 text-xl font-semibold">No Data Available</h2>
             <p class="mx-auto max-w-md text-muted-foreground">
               There aren't enough glucose readings in the selected date range to
@@ -550,13 +546,7 @@
                     <div
                       class="flex items-center gap-3 rounded-xl bg-white/30 p-3 opacity-60 dark:bg-white/5"
                     >
-                      <div
-                        class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-white/50 dark:bg-slate-800/50"
-                      >
-                        <ReportIcon
-                          class="h-5 w-5 text-slate-400 dark:text-slate-500"
-                        />
-                      </div>
+                      <Flag class="size-6 shrink-0 text-amber-500" />
                       <div class="min-w-0 flex-1">
                         <div
                           class="font-medium text-slate-500 dark:text-slate-400"

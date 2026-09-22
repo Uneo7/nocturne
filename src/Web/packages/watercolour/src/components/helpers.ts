@@ -1,5 +1,5 @@
 import { createArtworkPlayer, type ArtworkPlayer } from '../api/playback';
-import { type ArtworkId, type ArtworkOptions, type FitMode, type Surface, artworkAspect, detailForEdge } from '../types';
+import { type ArtworkId, type ArtworkOptions, type FitMode, type IconArtworkSource, type Surface, artworkAspect, detailForEdge } from '../types';
 
 export type PlayerReadyCallback = (player: ArtworkPlayer) => void | (() => void);
 
@@ -9,6 +9,8 @@ export type FitAnchor = 'center' | 'bottom-left';
 export interface MountOptions extends ArtworkOptions {
   surface?: Surface;
   assetBaseUrl?: string;
+  /** A Lucide icon source; takes precedence over the artwork id. */
+  icon?: IconArtworkSource;
   /**
    * `contain` (default) or `fill`, or a function deciding per container
    * size (e.g. ConfirmationBackground fills only near its 3:1 aspect).
@@ -22,9 +24,45 @@ export interface MountOptions extends ArtworkOptions {
 
 /** The page background the artwork sits on; matches Artwork.svelte's default. */
 export function hostSurface(): Surface {
-  if (typeof document !== 'undefined' && document.documentElement.classList.contains('dark')) return 'dark';
+  const doc = typeof document !== 'undefined' ? document : undefined;
+  if (doc) {
+    if (doc.documentElement.classList.contains('dark')) return 'dark';
+    if (doc.documentElement.classList.contains('light')) return 'light';
+    if (typeof getComputedStyle === 'function') {
+      const scheme = getComputedStyle(doc.documentElement).colorScheme;
+      if (scheme === 'dark') return 'dark';
+      if (scheme === 'light') return 'light';
+    }
+  }
   if (typeof matchMedia === 'function' && matchMedia('(prefers-color-scheme: dark)').matches) return 'dark';
   return 'light';
+}
+
+/**
+ * Calls back whenever {@link hostSurface} would answer differently.
+ *
+ * A component that resolves its assets once in an effect keeps the light-theme
+ * still after a theme toggle, because nothing it depends on changed. Anything
+ * still on screen across a toggle has to re-resolve, so it watches both the
+ * class the host sets and the system preference underneath it.
+ */
+export function watchSurface(onchange: (surface: Surface) => void): () => void {
+  if (typeof document === 'undefined') return () => {};
+  let current = hostSurface();
+  const check = () => {
+    const next = hostSurface();
+    if (next === current) return;
+    current = next;
+    onchange(next);
+  };
+  const observer = new MutationObserver(check);
+  observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'style'] });
+  const query = typeof matchMedia === 'function' ? matchMedia('(prefers-color-scheme: dark)') : undefined;
+  query?.addEventListener('change', check);
+  return () => {
+    observer.disconnect();
+    query?.removeEventListener('change', check);
+  };
 }
 
 export interface FitBox {
@@ -60,13 +98,14 @@ function resolveFitMode(options: MountOptions, containerWidth: number, container
 function resolveBox(
   containerWidth: number,
   containerHeight: number,
-  id: ArtworkId,
+  id: ArtworkId | undefined,
   options: MountOptions,
 ): FitBox {
   if (resolveFitMode(options, containerWidth, containerHeight) === 'fill') {
     return { width: containerWidth, height: containerHeight, offsetX: 0, offsetY: 0 };
   }
-  return containBox(containerWidth, containerHeight, artworkAspect(id), options.fitAnchor ?? 'center');
+  const aspect = options.icon || !id ? 1 : artworkAspect(id);
+  return containBox(containerWidth, containerHeight, aspect, options.fitAnchor ?? 'center');
 }
 
 function applyCanvasFit(canvas: HTMLCanvasElement, box: FitBox, dpr: number): void {
@@ -121,26 +160,39 @@ function currentCanvas(frame: HTMLElement, canvas: HTMLCanvasElement): HTMLCanva
 export function mountPlayer(
   frame: HTMLElement,
   canvas: HTMLCanvasElement,
-  id: ArtworkId,
+  id: ArtworkId | undefined,
   options: MountOptions,
   onready?: PlayerReadyCallback,
 ): () => void {
+  if (!options.icon && !id) throw new TypeError('Artwork requires either `artwork` or `icon`.');
   const dpr = componentDpr();
   const rect = frame.getBoundingClientRect();
   const containerWidth = Math.max(1, Math.round(rect.width));
   const containerHeight = Math.max(1, Math.round(rect.height));
   const box = resolveBox(containerWidth, containerHeight, id, options);
   applyCanvasFit(currentCanvas(frame, canvas), box, dpr);
+  const source = options.icon
+    ? {
+        icon: options.icon.icon,
+        name: options.icon.name,
+        hints: options.icon.hints,
+        palette: options.palette,
+        seed: options.seed,
+        intensity: options.intensity,
+        surface: options.surface ?? hostSurface(),
+        detail: detailForEdge(Math.max(box.width, box.height)),
+      }
+    : {
+        id: id!,
+        palette: options.palette,
+        seed: options.seed,
+        intensity: options.intensity,
+        surface: options.surface ?? hostSurface(),
+        detail: detailForEdge(Math.max(box.width, box.height)),
+      };
   const player = createArtworkPlayer(
     currentCanvas(frame, canvas),
-    {
-      id,
-      palette: options.palette,
-      seed: options.seed,
-      intensity: options.intensity,
-      surface: options.surface ?? hostSurface(),
-      detail: detailForEdge(Math.max(box.width, box.height)),
-    },
+    source,
     {
       durationMs: options.durationMs,
       easing: options.easing,

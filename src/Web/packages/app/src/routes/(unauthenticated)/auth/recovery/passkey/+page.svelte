@@ -2,7 +2,9 @@
   import * as Card from "$lib/components/ui/card";
   import { Button } from "$lib/components/ui/button";
   import { FormError } from "$lib/forms";
-  import { Fingerprint, KeyRound, Loader2, Check } from "lucide-svelte";
+  import { Fingerprint, Loader2, Check } from "lucide-svelte";
+  import { Artwork } from "@nocturne/watercolour";
+  import { fingerprintArtwork } from "$lib/watercolour-icons";
   import {
     startRegistration,
     type PublicKeyCredentialCreationOptionsJSON,
@@ -77,11 +79,13 @@
 <div class="flex min-h-screen items-center justify-center p-4">
   <Card.Root class="w-full max-w-md">
     <Card.Header class="text-center">
-      <div
-        class="mx-auto mb-2 flex h-12 w-12 items-center justify-center rounded-full bg-primary/10"
-      >
-        <KeyRound class="h-6 w-6 text-primary" />
-      </div>
+      <Artwork
+        icon={fingerprintArtwork}
+        palette="water"
+        motion="auto"
+        autoplay="once"
+        class="mx-auto mb-2 size-56"
+      />
       <Card.Title class="text-xl">Register a passkey</Card.Title>
       <Card.Description>
         {#if registered}

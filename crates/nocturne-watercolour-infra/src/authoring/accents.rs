@@ -33,16 +33,31 @@ pub(super) fn avatar_wash(style: &Style, palette: &Palette) -> Scene {
     let base = role(palette, PigmentRole::BaseWash);
     let accent = role(palette, PigmentRole::Accent);
     let shadow = role(palette, PigmentRole::Shadow);
+    let (y0, y1) = (0.15, 0.79);
+    let rows = if style.fine() { 7 } else { 5 };
     let mut p = Painting::new(style.ticks(320));
+    p.mask(0.0, frame.circle(0.47, 0.47, 0.32, 48), 0.02);
+    // The stencil owns the silhouette; the body only has to deliver pigment
+    // inside it. Pre-wet the footprint, then hatch the pigment in so the
+    // reveal has a path to pace. The turns sit outside the mask.
+    p.at(
+        0.0,
+        water(
+            frame.line(0.42, 0.44, 0.52, 0.5),
+            0.3,
+            style.water(0.75),
+            0.15,
+        ),
+    );
     p.at(
         0.0,
         brush(
-            frame.line(0.42, 0.44, 0.52, 0.5),
-            0.3,
+            frame.hatch(0.0, 1.0, y0, y1, rows),
+            frame.hatch_radius(y0, y1, rows),
             base,
-            style.conc(0.5),
-            style.water(1.15),
-            0.35,
+            style.conc(0.3),
+            style.water(0.42),
+            0.75,
         ),
     );
     p.at(
@@ -266,7 +281,7 @@ pub(super) fn confirmation_background(style: &Style, palette: &Palette) -> Scene
         } else {
             (glow, 0.6)
         };
-        p.dry(0.5);
+        p.glaze(0.5, 0.1);
         p.mask(0.5, frame.rect(1.35, 0.0, frame.aspect, 0.2), 0.03);
         p.at(
             0.5,
@@ -311,14 +326,26 @@ pub(super) fn header_motif(style: &Style, palette: &Palette) -> Scene {
         seed: nocturne_watercolour_core::domain::Seed(stream.next_u64()),
     };
     let mut p = Painting::new(style.ticks(420));
-    let fill = |pigment: usize, conc: f32| {
-        brush(
-            frame.line(0.0, 0.8, 5.0, 0.8),
-            0.4,
-            pigment,
-            style.conc(conc),
-            style.water(1.0),
-            0.1,
+    let fill = |pigment: usize, conc: f32, rows: usize| {
+        let radius = frame.hatch_radius(0.45, base_y, rows);
+        // The stencil owns the silhouette; the body only has to deliver pigment
+        // inside it. Pre-wet the footprint, then hatch the pigment in so the
+        // reveal has a path to pace. The turns sit outside the mask.
+        (
+            water(
+                frame.line(0.0, 0.75, 5.0, 0.75),
+                0.4,
+                style.water(0.75),
+                0.15,
+            ),
+            brush(
+                frame.hatch(0.0, 5.0, 0.45, base_y, rows),
+                radius,
+                pigment,
+                style.conc(conc * 0.6),
+                style.water(0.42),
+                0.75,
+            ),
         )
     };
     p.mask(
@@ -326,19 +353,23 @@ pub(super) fn header_motif(style: &Style, palette: &Palette) -> Scene {
         frame.ridge(0.0, 5.0, base_y, 60, |x| far.height(x)),
         0.006,
     );
-    p.at(0.0, fill(base, 0.35));
+    let (far_wet, far_hatch) = fill(base, 0.35, if style.fine() { 8 } else { 5 });
+    p.at(0.0, far_wet);
+    p.at(0.0, far_hatch);
     if style.fine() {
-        p.dry(0.4);
+        p.glaze(0.4, 0.1);
         p.mask(
             0.4,
             frame.ridge(0.0, 5.0, base_y, 60, |x| near.height(x)),
             0.006,
         );
-        p.at(0.4, fill(shadow, 0.4));
+        let (near_wet, near_hatch) = fill(shadow, 0.4, 8);
+        p.at(0.4, near_wet);
+        p.at(0.4, near_hatch);
     }
     let moon = 0.7;
     let (mx, my, mr) = (0.9, 0.36, 0.14);
-    p.dry(moon);
+    p.glaze(moon, 0.1);
     if style.full() {
         let crescent = Crescent::at(mx, my, mr, 0.3);
         p.mask(moon, frame.map(&crescent.mask_outline(0.02, 64)), 0.004);

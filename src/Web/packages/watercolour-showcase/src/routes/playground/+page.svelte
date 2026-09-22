@@ -14,6 +14,7 @@
   import Download from '@lucide/svelte/icons/download';
   import TriangleAlert from '@lucide/svelte/icons/triangle-alert';
   import PageHeader from '$lib/components/PageHeader.svelte';
+  import { LUCIDE_ICONS } from '$lib/lucide-icons';
   import type { ArtworkMode, ArtworkQuality, PaletteId } from '@nocturne/watercolour';
   import {
     DETAIL_OPTIONS,
@@ -34,8 +35,12 @@
   const pg = new PlaygroundState();
   let canvas: HTMLCanvasElement | undefined = $state();
 
+  const titleCase = (s: string) => s.replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+  const iconLabel = (id: string) => titleCase(id.slice('lucide:'.length));
   const artworkLabel = $derived(
-    (pg.availableArtworks.find((a) => a === pg.artwork) ?? pg.artwork).replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
+    pg.artwork.startsWith('lucide:')
+      ? iconLabel(pg.artwork)
+      : titleCase(pg.availableArtworks.find((a) => a === pg.artwork) ?? pg.artwork),
   );
   const paletteLabel = $derived(PLAYGROUND_PALETTES.find((p) => p.value === pg.palette)?.label ?? '');
   const modeLabel = $derived(PLAYGROUND_MODES.find((m) => m.value === pg.mode)?.label ?? '');
@@ -70,7 +75,10 @@
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
-  const fileStem = () => `${pg.artwork}-${pg.palette}${pg.surface === 'dark' ? '_dark' : ''}-${pg.seed}`;
+  const fileStem = () => {
+    const name = pg.artwork.startsWith('lucide:') ? pg.artwork.slice('lucide:'.length) : pg.artwork;
+    return `${name}-${pg.palette}${pg.surface === 'dark' ? '_dark' : ''}-${pg.seed}`;
+  };
 
   async function exportPng() {
     try {
@@ -123,11 +131,21 @@
         <Select.Root type="single" value={pg.artwork} onValueChange={(v) => (pg.artwork = v as PlaygroundArtwork)}>
           <Select.Trigger class="w-full" aria-label="Artwork">{artworkLabel}</Select.Trigger>
           <Select.Content>
-            {#each pg.availableArtworks as id (id)}
-              <Select.Item value={id} label={artworkLabel}>
-                {id.replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())}
-              </Select.Item>
-            {/each}
+            <Select.Group>
+              {#each pg.availableArtworks as id (id)}
+                <Select.Item value={id} label={artworkLabel}>
+                  {titleCase(id)}
+                </Select.Item>
+              {/each}
+            </Select.Group>
+            <Select.Group>
+              <Select.Label>Lucide icons</Select.Label>
+              {#each LUCIDE_ICONS as l (l.id)}
+                <Select.Item value={l.id} label={titleCase(l.name)}>
+                  {titleCase(l.name)}
+                </Select.Item>
+              {/each}
+            </Select.Group>
           </Select.Content>
         </Select.Root>
       </div>
@@ -175,7 +193,7 @@
             min="100"
             step="100"
             value={pg.durationMs}
-            onchange={(e: Event & { currentTarget: HTMLInputElement }) => (pg.durationMs = Math.max(100, Number(e.currentTarget.value) || 600))}
+            onchange={(e: Event & { currentTarget: HTMLInputElement }) => (pg.durationMs = Math.max(100, Number(e.currentTarget.value) || 3000))}
           />
         </div>
       </div>
@@ -251,8 +269,13 @@
         </Select.Root>
       </div>
       <div class="grid gap-2">
-        <div class="flex justify-between text-sm"><Label>Tail</Label><span class="tabular-nums text-muted-foreground">{pg.tail.toFixed(2)}</span></div>
-        <Slider type="single" value={pg.tail} onValueCommit={(v) => (pg.tail = v)} min={0} max={0.6} step={0.05} aria-label="Tail" />
+        <div class="flex justify-between gap-2 text-sm">
+          <Label>Tail</Label>
+          <span class="tabular-nums text-muted-foreground">
+            {Math.round(pg.durationMs * (1 - pg.tail))} ms brush / {Math.round(pg.durationMs * pg.tail)} ms set
+          </span>
+        </div>
+        <Slider type="single" value={pg.tail} onValueCommit={(v) => (pg.tail = v)} min={0} max={0.95} step={0.05} aria-label="Tail" />
       </div>
       <div class="grid gap-2">
         <Label>Mode</Label>

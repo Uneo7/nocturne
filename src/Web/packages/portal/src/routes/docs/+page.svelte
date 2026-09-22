@@ -1,17 +1,29 @@
 <script lang="ts">
+    import { ArtworkHero, ConfirmationBackground } from "@nocturne/watercolour";
     import Content from "../../content/docs/index.svx";
     import SupportNocturne from "$lib/components/docs/SupportNocturne.svelte";
+    import { DOCS_HERO } from "$lib/data/docs-artwork";
     import {
         ArrowRight,
-        Book,
-        Rocket,
         Download,
         Settings,
         Code2,
+        BookOpen,
+        Rocket,
     } from "@lucide/svelte";
+
+    const hero = DOCS_HERO[""];
 </script>
 
 <div class="max-w-3xl">
+    <ArtworkHero
+        artwork={hero.artwork}
+        palette={hero.palette}
+        motion="auto"
+        autoplay="once"
+        size={400}
+        wrap={hero.wrap ?? true}
+    />
     <Content />
 
     <div class="grid gap-4 not-prose">
@@ -23,7 +35,7 @@
                 <div
                     class="w-12 h-12 rounded-lg bg-green-500/15 flex items-center justify-center shrink-0"
                 >
-                    <Rocket class="w-6 h-6 text-green-500" />
+                    <Rocket class="size-6 text-green-500" />
                 </div>
                 <div class="flex-1">
                     <h2
@@ -127,7 +139,7 @@
 
     <div class="mt-12 p-6 rounded-xl border border-amber-500/30 bg-amber-500/5">
         <div class="flex items-start gap-3">
-            <Book class="w-5 h-5 text-amber-500 mt-0.5 shrink-0" />
+            <BookOpen class="size-6 shrink-0 text-amber-500" />
             <div>
                 <h3
                     class="font-semibold text-amber-700 dark:text-amber-400 mb-1"
@@ -141,5 +153,12 @@
                 </p>
             </div>
         </div>
+    </div>
+
+    <div
+        class="relative mt-4 h-8 w-24 overflow-hidden sm:h-10 sm:w-[120px] dark:hidden"
+        aria-hidden="true"
+    >
+        <ConfirmationBackground palette="moss" motion="auto" autoplay="once" />
     </div>
 </div>

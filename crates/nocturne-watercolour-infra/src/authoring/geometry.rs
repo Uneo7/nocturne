@@ -63,6 +63,45 @@ impl Frame {
         vec![self.pt(x0, y0), self.pt(x1, y1)]
     }
 
+    /// The path a flat wash is actually laid along: `rows` overlapping
+    /// horizontal sweeps between `y0` and `y1`, alternating direction, joined
+    /// at the turns into one continuous walk.
+    ///
+    /// This is how a wide area gets painted without a wide stamp. One fat
+    /// stamp over a short path covers its whole footprint on the first step of
+    /// the reveal, so there is nothing to watch; the same area hatched in
+    /// takes the pen a path long enough to pace. The stencil still owns the
+    /// silhouette — `x0` and `x1` are meant to sit *outside* the mask so the
+    /// turns are clipped away and no row ends inside the shape.
+    pub fn hatch(&self, x0: f32, x1: f32, y0: f32, y1: f32, rows: usize) -> Vec<Point> {
+        let rows = rows.max(1);
+        let mut path = Vec::with_capacity(rows * 2);
+        for i in 0..rows {
+            let t = if rows == 1 {
+                0.5
+            } else {
+                i as f32 / (rows - 1) as f32
+            };
+            let y = y0 + (y1 - y0) * t;
+            let (a, b) = if i % 2 == 0 { (x0, x1) } else { (x1, x0) };
+            path.push(self.pt(a, y));
+            path.push(self.pt(b, y));
+        }
+        path
+    }
+
+    /// The brush radius that makes [`Self::hatch`]'s rows merge into one wash
+    /// rather than reading as stripes: a little over the row pitch, so a row
+    /// overlaps its neighbour by more than half a brush and the tidelines
+    /// between them close. A single row falls back to covering the whole band.
+    pub fn hatch_radius(&self, y0: f32, y1: f32, rows: usize) -> f32 {
+        let span = (y1 - y0).abs();
+        if rows <= 1 {
+            return (span * 0.5).max(1e-3);
+        }
+        (span / (rows - 1) as f32 * 1.1).max(1e-3)
+    }
+
     /// A hill silhouette: `profile(x)` is the ridge height in design `y`
     /// across `x0..x1`; the polygon closes along `base_y`.
     pub fn ridge(

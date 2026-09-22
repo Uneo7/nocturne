@@ -1,9 +1,9 @@
 <script lang="ts">
+    import { Artwork } from "@nocturne/watercolour";
     import { getRoadmapData, type RoadmapMilestone } from "$lib/data/portal";
     import { Button } from "@nocturne/ui/ui/button";
     import MilestoneCard from "$lib/components/MilestoneCard.svelte";
     import {
-        Milestone,
         GitPullRequest,
         ExternalLink,
         AlertCircle,
@@ -101,9 +101,7 @@
         </div>
     {:else if roadmapData.length === 0}
         <div class="flex flex-col items-center justify-center gap-3 py-[100px] text-muted-foreground text-[0.9375rem]">
-            <div class="size-10 rounded-full bg-muted flex items-center justify-center">
-                <Milestone class="w-5 h-5 text-muted-foreground" />
-            </div>
+            <Artwork artwork="footprints" palette="moss" motion="auto" autoplay="once" class="size-48" />
             <p class="m-0 text-sm">No milestones found.</p>
         </div>
     {:else}

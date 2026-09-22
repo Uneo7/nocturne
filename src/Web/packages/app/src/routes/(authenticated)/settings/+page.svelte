@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Settings } from "lucide-svelte";
+    import { Settings } from "lucide-svelte";
   import SettingsLinkCard from "$lib/components/settings/SettingsLinkCard.svelte";
   import {
     adminSettingsSections,

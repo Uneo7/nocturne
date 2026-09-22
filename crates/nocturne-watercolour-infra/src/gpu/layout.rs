@@ -59,8 +59,12 @@ impl StateLayout {
     pub fn aspect(&self) -> usize {
         self.dry_rate() + 2
     }
+    /// `SimulationGrid::settle_share`, read by `transfer.wgsl`.
+    pub fn settle_share(&self) -> usize {
+        self.dry_rate() + 3
+    }
     /// Total f32 count, including a 4-element header tail holding
-    /// `dry_rate`, the composite-mode flag, the aspect and one spare float.
+    /// `dry_rate`, the composite-mode flag, the aspect and `settle_share`.
     pub fn state_len(&self) -> usize {
         self.dry_rate() + 4
     }
@@ -109,6 +113,7 @@ impl StateLayout {
         out[self.g(0)..self.g(0) + kn].copy_from_slice(&grid.pigments_in_water);
         out[self.d(0)..self.d(0) + kn].copy_from_slice(&grid.pigments_deposited);
         out[self.dry_rate()] = grid.dry_rate;
+        out[self.settle_share()] = grid.settle_share;
         out[self.composite_mode()] = grid.composite_mode.flag();
         out[self.aspect()] = grid.aspect;
         out
@@ -133,6 +138,7 @@ impl StateLayout {
             paper_height: data[self.h()..self.h() + n].to_vec(),
             bleed_mask: data[self.m()..self.m() + n].to_vec(),
             dry_rate: data[self.dry_rate()],
+            settle_share: data[self.settle_share()],
             composite_mode: CompositeMode::from_flag(data[self.composite_mode()]),
             aspect: data[self.aspect()],
         }

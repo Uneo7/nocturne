@@ -24,7 +24,7 @@
   import { bg, bgLabel, bgRange, formatMediumDateTime, formatNumber, formatNumericDate } from "$lib/utils/formatting";
   import { requireDateParamsContext } from "$lib/hooks/date-params.svelte";
   import { contextResource } from "$lib/hooks/resource-context.svelte";
-
+  
   // Get shared date params from context (set by reports layout)
   // Default: 14 days is the standard AGP report period
   const reportsParams = requireDateParamsContext(14);
@@ -88,6 +88,7 @@
         </Button>
       </div>
     </div>
+
 
     <!-- Period info -->
     <div class="flex items-center gap-2 text-sm text-muted-foreground">

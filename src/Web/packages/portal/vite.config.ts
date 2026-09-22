@@ -117,6 +117,7 @@ export default defineConfig({
     strictPort: true,
     fs: {
       allow: [resolve(__dirname, 'src/lib/release')],
+      strict: false, // pnpm symlinks into its content-addressable store
     },
   },
   ssr: {

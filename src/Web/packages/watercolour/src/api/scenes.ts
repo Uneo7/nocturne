@@ -1,5 +1,6 @@
-import type { ArtworkId, DetailLevel, PaletteId, Surface } from '../types';
+import type { ArtworkId, DetailLevel, IconHints, IconNode, PaletteId, Surface } from '../types';
 import { DEFAULT_INTENSITY } from '../types';
+import { ICON_HINTS } from './icon-hints';
 import { WatercolourError, toWatercolourError } from './errors';
 import type { WasmModule } from './engine-host';
 
@@ -15,8 +16,20 @@ export interface ArtworkRef {
   detail?: DetailLevel;
 }
 
-/** A ready scene document (JSON string) or a catalogue reference the engine expands. */
-export type SceneSource = ArtworkRef | { sceneJson: string };
+export interface IconRef {
+  icon: IconNode[];
+  name: string;
+  /** Overrides the library's built-in tuning for `name`, per field. */
+  hints?: IconHints;
+  palette?: PaletteId;
+  seed?: number;
+  intensity?: number;
+  surface?: Surface;
+  detail?: DetailLevel;
+}
+
+/** A ready scene document (JSON string) or a catalogue or icon reference the engine expands. */
+export type SceneSource = ArtworkRef | IconRef | { sceneJson: string };
 
 /** Live-mode overrides derived from the canvas's backing store size. */
 export interface SceneResolutionOverride {
@@ -27,6 +40,10 @@ export interface SceneResolutionOverride {
 
 export function isArtworkRef(source: SceneSource): source is ArtworkRef {
   return typeof (source as ArtworkRef).id === 'string';
+}
+
+export function isIconRef(source: SceneSource): source is IconRef {
+  return Array.isArray((source as IconRef).icon);
 }
 
 export interface SceneDocumentHeader {
@@ -70,12 +87,42 @@ export function paletteKey(palette: PaletteId = 'moonlight', surface: Surface = 
   return surface === 'dark' ? `${palette}_dark` : palette;
 }
 
+/**
+ * The library's built-in tuning for `name` with the caller's `ref.hints`
+ * layered over it; the caller wins per field. `undefined` when there is
+ * nothing to send (no built-in entry, no caller hints).
+ */
+export function mergeIconHints(name: string, hints?: IconHints): IconHints | undefined {
+  const builtin = ICON_HINTS[name];
+  if (!builtin && !hints) return undefined;
+  const caller: Record<string, unknown> = {};
+  for (const key of Object.keys(hints ?? {})) {
+    const value = (hints as Record<string, unknown>)[key];
+    if (value !== undefined) caller[key] = value;
+  }
+  return { ...builtin, ...(caller as IconHints) };
+}
+
 export function resolveSceneJson(
-  module: Pick<WasmModule, 'catalogueScene'>,
-  ref: ArtworkRef,
+  module: Pick<WasmModule, 'catalogueScene' | 'iconScene'>,
+  ref: ArtworkRef | IconRef,
   override: SceneResolutionOverride = {},
 ): string {
   try {
+    if (isIconRef(ref)) {
+      const hints = mergeIconHints(ref.name, ref.hints);
+      return module.iconScene(
+        JSON.stringify(ref.icon),
+        ref.name,
+        ref.seed ?? 0,
+        ref.palette ?? 'moonlight',
+        ref.intensity ?? DEFAULT_INTENSITY,
+        override.detail ?? ref.detail ?? 'large',
+        ref.surface ?? 'light',
+        override.simResolution ?? 0,
+        hints ? JSON.stringify(hints) : '',
+      );
+    }
     return module.catalogueScene(
       ref.id,
       ref.seed ?? 0,
@@ -88,4 +135,24 @@ export function resolveSceneJson(
   } catch (error) {
     throw toWatercolourError(error);
   }
+}
+
+/** Stroke colour for the plain-SVG fallback, chosen so the stroke reads on the host ground. */
+export function iconSvgStroke(surface: Surface): string {
+  return surface === 'dark' ? '#e8e6e1' : '#3d4451';
+}
+
+/**
+ * The plain Lucide SVG for an element list, used when live mode is unavailable
+ * and no baked asset exists for an icon source.
+ */
+export function iconSvg(icon: IconNode[], surface: Surface): string {
+  const parts = icon.map(([tag, attrs]) => {
+    const a = Object.entries(attrs)
+      .filter(([, v]) => v != null)
+      .map(([k, v]) => `${k}="${String(v).replaceAll('"', '&quot;')}"`)
+      .join(' ');
+    return `<${tag} ${a}/>`;
+  });
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="${iconSvgStroke(surface)}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${parts.join('')}</svg>`;
 }

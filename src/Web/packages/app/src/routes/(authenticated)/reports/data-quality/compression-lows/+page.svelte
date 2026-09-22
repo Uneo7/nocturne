@@ -20,7 +20,7 @@
 		triggerDetection as triggerCompressionLowDetection
 	} from '$api/generated/compressionLows.generated.remote';
 	import { contextResource } from '$lib/hooks/resource-context.svelte';
-	import { createChartDataEngine } from '$lib/components/dashboard/glucose-chart/engine/chart-data-engine.svelte';
+		import { createChartDataEngine } from '$lib/components/dashboard/glucose-chart/engine/chart-data-engine.svelte';
 	import GlucoseChartShell from '$lib/components/dashboard/glucose-chart/GlucoseChartShell.svelte';
 	import GlucoseTrack from '$lib/components/dashboard/glucose-chart/tracks/GlucoseTrack.svelte';
 	import BasalTrack from '$lib/components/dashboard/glucose-chart/tracks/BasalTrack.svelte';
@@ -343,6 +343,7 @@
 				</Select>
 			</div>
 		</div>
+
 
 		{#if suggestions.length === 0}
 			<Card>

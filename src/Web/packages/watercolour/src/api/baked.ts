@@ -18,6 +18,24 @@ export const BAKED_MANIFEST_VERSION = 1;
 export const MAX_BAKED_FRAMES = 16;
 export const MAX_BAKED_FRAME_EDGE = 256;
 
+/**
+ * How far a strip frame may be enlarged before the static final is the
+ * better source. The final is baked at twice the frame cap, so it always
+ * wins beyond this.
+ */
+export const MAX_BAKED_UPSCALE = 1.5;
+
+/**
+ * Whether the baked reveal is a fair source for a canvas this many device
+ * pixels on its long edge.
+ *
+ * Strip frames are capped at `MAX_BAKED_FRAME_EDGE`, and several pieces bake
+ * smaller still, so a hero-sized canvas would be enlarging a thumbnail.
+ */
+export function bakedServesEdge(longEdgeDevicePx: number): boolean {
+  return longEdgeDevicePx <= MAX_BAKED_FRAME_EDGE * MAX_BAKED_UPSCALE;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
@@ -138,6 +156,51 @@ export async function loadStill(url: string): Promise<ImageBitmap> {
   const response = await fetch(url);
   if (!response.ok) throw new WatercolourError('AssetMissing', `${url}: HTTP ${response.status}`);
   return createImageBitmap(await response.blob(), { premultiplyAlpha: 'premultiply' });
+}
+
+/**
+ * How many decoded stills are kept. Each is up to a megabyte of pixels, and
+ * the ones worth keeping are the ones currently on a page.
+ */
+export const MAX_SHARED_STILLS = 8;
+
+const shared = new Map<string, Promise<ImageBitmap>>();
+
+/**
+ * A still decoded once and drawn by everything that needs it.
+ *
+ * One page can put the same four marks on forty surfaces, and a surface that
+ * scrolls out of view and back builds its backend again. Decoding per backend
+ * meant two images decoded sixty-nine times over a couple of scrolls: nothing
+ * off the network, because the HTTP cache serves them, but 5.6 MB of decode
+ * for 160 KB of data.
+ *
+ * The cache owns what it lends. A borrower draws from the bitmap and never
+ * closes it, and eviction drops the reference rather than closing, because a
+ * backend may still hold one to redraw on its next resize. {@link loadStill}
+ * is untouched for callers that want a bitmap of their own.
+ */
+export function sharedStill(url: string): Promise<ImageBitmap> {
+  const hit = shared.get(url);
+  if (hit) {
+    // Re-inserted, so the cap evicts whatever has gone longest unused.
+    shared.delete(url);
+    shared.set(url, hit);
+    return hit;
+  }
+  const pending = loadStill(url).catch((error: unknown) => {
+    // Not cached: the next attempt can succeed where this one did not.
+    shared.delete(url);
+    throw error;
+  });
+  shared.set(url, pending);
+  if (shared.size > MAX_SHARED_STILLS) shared.delete(shared.keys().next().value!);
+  return pending;
+}
+
+/** Drops every cached still, for tests and for a host reclaiming memory. */
+export function clearSharedStills(): void {
+  shared.clear();
 }
 
 export function drawStill(ctx: CanvasRenderingContext2D, image: ImageBitmap, width: number, height: number): void {

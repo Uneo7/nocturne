@@ -5,13 +5,14 @@
 
 use nocturne_watercolour_core::application::Reveal;
 use nocturne_watercolour_core::domain::{
-    Background, Palette, Paper, PigmentRole, Point, Scene, SceneId, Seed, SimResolution, SizeHint,
+    Background, Palette, Paper, PigmentRole, Point, Scene, SceneId, Seed, SimResolution,
+    SizeHint,
 };
 
 use super::geometry::{Crescent, Frame, Hills, Notch, WaterBody};
 use super::{
-    DEFAULT_INTENSITY, DetailLevel, Painting, SQUARE, Style, brush, granulating_role, lift, role,
-    tapered, water,
+    DEFAULT_INTENSITY, DetailLevel, Painting, SQUARE, Style, brush, choreograph_scene,
+    granulating_role, lift, role, tapered, water,
 };
 
 pub(super) const WIDE_16_9: SizeHint = SizeHint {
@@ -97,7 +98,9 @@ const THREE_SHAPES: [Shape; 3] = [
 /// edge stays crisp.
 pub fn glaze_pair(seed: Seed, palette: Palette) -> Scene {
     let style = Style::new(seed, DEFAULT_INTENSITY, DetailLevel::Large);
-    shapes_scene("glaze-pair", &style, &palette, &THREE_SHAPES[..2])
+    let mut scene = shapes_scene("glaze-pair", &style, &palette, &THREE_SHAPES[..2]);
+    choreograph_scene(&mut scene, &style.choreography());
+    scene
 }
 
 /// Three overlapping rounded shapes suggesting connection: each is glazed
@@ -114,17 +117,22 @@ fn shapes_scene(id: &str, style: &Style, palette: &Palette, shapes: &[Shape]) ->
         let pigment = role(palette, which);
         let f = i as f32 * phase;
         if i > 0 {
-            p.dry(f);
+            p.glaze(f, 0.1);
         }
+        let rows = if style.fine() { 9 } else { 5 };
+        let radius = frame.hatch_radius(cy - r, cy + r, rows);
+        // The stencil owns the silhouette; the body only has to deliver pigment
+        // inside it. Hatch the pigment in so the reveal has a path to pace;
+        // the turns sit outside the mask.
         p.at(
             f,
             brush(
-                frame.line(cx - r * 0.25, cy - r * 0.15, cx + r * 0.25, cy + r * 0.15),
-                r * 0.8,
+                frame.hatch(cx - r - radius, cx + r + radius, cy - r, cy + r, rows),
+                radius,
                 pigment,
-                style.conc(0.55),
-                style.water(1.1),
-                0.3,
+                style.conc(0.55 * 0.9),
+                style.water(0.6),
+                0.85,
             ),
         );
         if style.fine() {
@@ -194,27 +202,32 @@ pub(super) fn moonlit_shoreline(style: &Style, palette: &Palette) -> Scene {
         body.polygon(&frame)
     };
     p.mask(0.0, water_poly, 0.012);
+    let rows = if style.fine() { 8 } else { 5 };
+    let radius = frame.hatch_radius(body.top, body.bottom, rows);
+    // The stencil owns the silhouette; the body only has to deliver pigment
+    // inside it. Pre-wet the footprint, then hatch the pigment in so the
+    // reveal has a path to pace. The turns sit outside the mask.
+    p.at(
+        0.0,
+        water(
+            frame.line(0.1, 0.7, frame.aspect - 0.12, 0.7),
+            0.22,
+            style.water(0.75),
+            0.15,
+        ),
+    );
+    p.at(
+        0.0,
+        brush(
+            frame.hatch(0.0, frame.aspect, body.top, body.bottom, rows),
+            radius,
+            base,
+            style.conc(0.42),
+            style.water(0.42),
+            0.75,
+        ),
+    );
     if style.fine() {
-        // Rows shorten, thin and soften toward the bottom so the wash
-        // dissolves before it reaches the mask.
-        let rows = [
-            (0.6, 0.1, 0.65, 1.1, 0.3, 0.08, frame.aspect - 0.1),
-            (0.74, 0.09, 0.42, 0.75, 0.6, 0.2, frame.aspect - 0.28),
-            (0.85, 0.06, 0.22, 0.4, 0.95, 0.4, frame.aspect - 0.5),
-        ];
-        for &(y, r, conc, wet, soft, xa, xb) in &rows {
-            p.at(
-                0.0,
-                brush(
-                    frame.line(xa, y, xb, y + 0.012),
-                    r,
-                    base,
-                    style.conc(conc),
-                    style.water(wet),
-                    soft,
-                ),
-            );
-        }
         p.at(
             0.05,
             brush(
@@ -235,18 +248,6 @@ pub(super) fn moonlit_shoreline(style: &Style, palette: &Palette) -> Scene {
                 style.conc(0.5),
                 style.water(0.3),
                 0.9,
-            ),
-        );
-    } else {
-        p.at(
-            0.0,
-            tapered(
-                frame.line(0.1, 0.7, frame.aspect - 0.12, 0.7),
-                (0.22, 0.2),
-                base,
-                style.conc(0.65),
-                style.water(1.1),
-                0.6,
             ),
         );
     }
@@ -272,7 +273,7 @@ pub(super) fn moonlit_shoreline(style: &Style, palette: &Palette) -> Scene {
             );
         }
     }
-    p.dry(0.5).clear_mask(0.5);
+    p.glaze(0.5, 0.1).clear_mask(0.5);
     p.at(
         0.5,
         tapered(
@@ -322,7 +323,7 @@ pub(super) fn moonlit_shoreline(style: &Style, palette: &Palette) -> Scene {
                 0.9,
             ),
         );
-        p.dry(0.72);
+        p.glaze(0.72, 0.1);
         p.mask(0.72, notch.wedge(&frame), 0.01);
         p.at(
             0.72,
@@ -336,7 +337,7 @@ pub(super) fn moonlit_shoreline(style: &Style, palette: &Palette) -> Scene {
             ),
         );
     }
-    p.dry(0.8);
+    p.glaze(0.8, 0.1);
     if style.fine() {
         let crescent = Crescent::at(moon_x, moon_y, moon_r, 0.4);
         p.mask(0.8, frame.map(&crescent.mask_outline(0.02, 64)), 0.004);
@@ -415,28 +416,43 @@ pub(super) fn distant_mountains(style: &Style, palette: &Palette) -> Scene {
         wobble: 0.015,
         seed: seeded(),
     };
-    let ridges: Vec<(&Hills, usize, f32)> = if style.fine() {
+    let ridges: Vec<(&Hills, usize, f32, usize)> = if style.fine() {
         vec![
-            (&far, base, 0.4),
-            (&mid, shadow, 0.4),
-            (&near, shadow, 0.55),
+            // The far ridge is the first thing the pen draws and carries most
+            // of the picture, so it gets the finer hatch: a longer path keeps
+            // the wash arriving instead of arriving whole.
+            (&far, base, 0.4, 12),
+            (&mid, shadow, 0.4, 7),
+            (&near, shadow, 0.55, 7),
         ]
     } else {
-        vec![(&far, base, 0.5), (&near, shadow, 0.6)]
+        vec![(&far, base, 0.5, 5), (&near, shadow, 0.6, 5)]
     };
     let mut p = Painting::new(style.ticks(560));
-    let fill = |pigment: usize, conc: f32, wet: f32, y: f32, softness: f32| {
-        brush(
-            frame.line(0.0, y, 2.0, y),
-            0.4,
-            pigment,
-            style.conc(conc),
-            style.water(wet),
-            softness,
+    let fill = |pigment: usize, conc: f32, rows: usize| {
+        let radius = frame.hatch_radius(0.1, base_y, rows);
+        // The stencil owns the silhouette; the body only has to deliver
+        // pigment inside it. Pre-wet the footprint, then hatch the pigment
+        // in so the reveal has a path to pace. The turns sit outside the mask.
+        (
+            water(
+                frame.line(0.0, base_y - 0.2, 2.0, base_y - 0.2),
+                0.4,
+                style.water(0.75),
+                0.15,
+            ),
+            brush(
+                frame.hatch(0.0, 2.0, 0.1, base_y, rows),
+                radius,
+                pigment,
+                style.conc(conc * 0.6),
+                style.water(0.42),
+                0.75,
+            ),
         )
     };
     let phase = 0.66 / ridges.len() as f32;
-    for (i, &(hills, pigment, conc)) in ridges.iter().enumerate() {
+    for (i, &(hills, pigment, conc, rows)) in ridges.iter().enumerate() {
         let f = i as f32 * phase;
         if i > 0 {
             p.dry(f);
@@ -446,7 +462,9 @@ pub(super) fn distant_mountains(style: &Style, palette: &Palette) -> Scene {
             frame.ridge(0.0, 2.0, base_y, 48, |x| hills.height(x)),
             0.008,
         );
-        p.at(f, fill(pigment, conc, 1.0, base_y - 0.2, 0.1));
+        let (wet, hatched) = fill(pigment, conc, rows);
+        p.at(f, wet);
+        p.at(f, hatched);
         if style.fine() {
             p.at(
                 f + phase * 0.15,
@@ -471,7 +489,7 @@ pub(super) fn distant_mountains(style: &Style, palette: &Palette) -> Scene {
     let union = frame.ridge(0.0, 2.0, base_y, 48, |x| {
         ridges
             .iter()
-            .map(|(h, _, _)| h.reflected_height(x, squash))
+            .map(|(h, _, _, _)| h.reflected_height(x, squash))
             .fold(base_y, f32::max)
     });
     p.mask(reflect, union.clone(), 0.1);
@@ -484,7 +502,7 @@ pub(super) fn distant_mountains(style: &Style, palette: &Palette) -> Scene {
             0.8,
         ),
     );
-    for &(hills, pigment, conc) in &ridges {
+    for &(hills, pigment, conc, _) in &ridges {
         p.mask(
             reflect,
             frame.ridge(0.0, 2.0, base_y, 48, |x| hills.reflected_height(x, squash)),
@@ -510,7 +528,7 @@ pub(super) fn distant_mountains(style: &Style, palette: &Palette) -> Scene {
             let x = 2.0 * i as f32 / 24.0;
             let y = ridges
                 .iter()
-                .map(|(h, _, _)| h.reflected_height(x, squash))
+                .map(|(h, _, _, _)| h.reflected_height(x, squash))
                 .fold(base_y, f32::max);
             frame.pt(x, y - 0.015)
         })
@@ -614,25 +632,32 @@ pub(super) fn connected_shores(style: &Style, palette: &Palette) -> Scene {
     ]);
     let mut p = Painting::new(style.ticks(560));
     p.mask(0.0, water_poly, 0.012);
+    let rows = if style.fine() { 8 } else { 5 };
+    let radius = frame.hatch_radius(body.top, body.bottom, rows);
+    // The stencil owns the silhouette; the body only has to deliver pigment
+    // inside it. Pre-wet the footprint, then hatch the pigment in so the
+    // reveal has a path to pace. The turns sit outside the mask.
+    p.at(
+        0.0,
+        water(
+            frame.line(0.0, 0.65, 2.0, 0.65),
+            0.28,
+            style.water(0.75),
+            0.15,
+        ),
+    );
+    p.at(
+        0.0,
+        brush(
+            frame.hatch(0.0, 2.0, body.top, body.bottom, rows),
+            radius,
+            base,
+            style.conc(0.42),
+            style.water(0.42),
+            0.75,
+        ),
+    );
     if style.fine() {
-        let rows = [
-            (0.45, 0.1, 0.6, 1.2, 0.3, 0.0, 2.0),
-            (0.62, 0.1, 0.5, 1.0, 0.45, 0.1, 1.9),
-            (0.78, 0.08, 0.22, 0.4, 0.9, 0.3, 1.7),
-        ];
-        for &(y, r, conc, wet, soft, xa, xb) in &rows {
-            p.at(
-                0.0,
-                brush(
-                    frame.line(xa, y, xb, y + 0.01),
-                    r,
-                    base,
-                    style.conc(conc),
-                    style.water(wet),
-                    soft,
-                ),
-            );
-        }
         p.at(
             0.05,
             brush(
@@ -655,54 +680,57 @@ pub(super) fn connected_shores(style: &Style, palette: &Palette) -> Scene {
                 0.9,
             ),
         );
-    } else {
-        p.at(
-            0.0,
-            brush(
-                frame.line(0.0, 0.65, 2.0, 0.65),
-                0.28,
-                base,
-                style.conc(0.65),
-                style.water(1.1),
-                0.3,
-            ),
-        );
     }
-    let shore = |p: &mut Painting, f: f32, poly: Vec<Point>, cx: f32, waterline: (f32, f32)| {
-        p.dry(f);
-        p.mask(f, poly, 0.01);
-        p.at(
-            f,
-            brush(
-                frame.line(cx, 0.4, cx, 0.5),
-                0.3,
-                accent,
-                style.conc(0.8),
-                style.water(0.8),
-                0.15,
-            ),
-        );
-        if style.fine() {
+    let shore =
+        |p: &mut Painting, f: f32, poly: Vec<Point>, x0: f32, x1: f32, waterline: (f32, f32)| {
+            p.glaze(f, 0.1);
+            p.mask(f, poly, 0.01);
+            let rows = if style.fine() { 6 } else { 4 };
+            let radius = frame.hatch_radius(0.3, 0.6, rows);
+            // The stencil owns the silhouette; the body only has to deliver pigment
+            // inside it. Pre-wet the footprint, then hatch the pigment in so the
+            // reveal has a path to pace. The turns sit outside the mask.
             p.at(
-                f + 0.04,
-                brush(
-                    frame.line(waterline.0, 0.55, waterline.1, 0.56),
-                    0.03,
-                    shadow,
-                    style.conc(0.5),
-                    style.water(0.2),
-                    0.9,
+                f,
+                water(
+                    frame.line(x0 + 0.08, 0.45, x1 - 0.08, 0.45),
+                    0.3,
+                    style.water(0.75),
+                    0.15,
                 ),
             );
-        }
-    };
+            p.at(
+                f,
+                brush(
+                    frame.hatch(x0, x1, 0.3, 0.6, rows),
+                    radius,
+                    accent,
+                    style.conc(0.8 * 0.6),
+                    style.water(0.42),
+                    0.75,
+                ),
+            );
+            if style.fine() {
+                p.at(
+                    f + 0.04,
+                    brush(
+                        frame.line(waterline.0, 0.55, waterline.1, 0.56),
+                        0.03,
+                        shadow,
+                        style.conc(0.5),
+                        style.water(0.2),
+                        0.9,
+                    ),
+                );
+            }
+        };
     p.settle(0.1, 2.5);
     for f in [0.16, 0.28] {
         p.at(f, lift(body.floor_path(&frame, 0.02), 0.07, 0.7, 0.9));
     }
-    shore(&mut p, 0.42, left_shore, 0.25, (0.05, 0.4));
-    shore(&mut p, 0.6, right_shore, 1.75, (1.6, 1.95));
-    p.dry(0.78);
+    shore(&mut p, 0.42, left_shore, 0.0, 0.62, (0.05, 0.4));
+    shore(&mut p, 0.6, right_shore, 1.4, 2.0, (1.6, 1.95));
+    p.glaze(0.78, 0.1);
     p.mask(0.78, slit, 0.01);
     p.at(
         0.78,
@@ -720,7 +748,7 @@ pub(super) fn connected_shores(style: &Style, palette: &Palette) -> Scene {
         ),
     );
     if style.full() {
-        p.dry(0.9);
+        p.glaze(0.9, 0.1);
         p.mask(0.9, frame.circle(1.0, 0.16, 0.05, 24), 0.004);
         p.at(
             0.9,

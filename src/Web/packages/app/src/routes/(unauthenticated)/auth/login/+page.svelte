@@ -1,7 +1,8 @@
 <script lang="ts">
   import * as Card from "$lib/components/ui/card";
   import { Button } from "$lib/components/ui/button";
-  import { Fingerprint } from "lucide-svelte";
+  import { Artwork } from "@nocturne/watercolour";
+  import { fingerprintArtwork } from "$lib/watercolour-icons";
   import { getAuthState } from "../auth.remote";
   import { getAuthStatus } from "$lib/api/generated";
   import { page } from "$app/state";
@@ -40,11 +41,13 @@
 <div class="flex flex-1 items-center justify-center p-4">
   <Card.Root class="w-full max-w-md" data-testid="sign-in-card">
     <Card.Header class="space-y-1 text-center">
-      <div
-        class="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-primary/10"
-      >
-        <Fingerprint class="h-6 w-6 text-primary" />
-      </div>
+      <Artwork
+        artwork="crescent-moon"
+        palette="moonlight"
+        motion="auto"
+        autoplay="once"
+        class="mx-auto mb-4 size-48"
+      />
       <Card.Title class="text-2xl font-bold">
         Welcome to Nocturne
       </Card.Title>
@@ -54,6 +57,15 @@
     </Card.Header>
 
     <Card.Content>
+      <div class="mb-4 flex justify-center">
+        <Artwork
+          icon={fingerprintArtwork}
+          palette="water"
+          motion="auto"
+          autoplay="once"
+          class="size-56"
+        />
+      </div>
       <LoginForm {returnUrl} {tenantless} />
     </Card.Content>
 

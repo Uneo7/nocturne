@@ -28,7 +28,7 @@
     getBasalAnalysis,
     getHourlyInsulinDelivery,
   } from "$api/generated/statistics.generated.remote";
-
+    
   interface Props {
     analysisDates: { startDate: Date; endDate: Date };
     dateInfo: { from: Date; to: Date; dayCount: number };
@@ -96,8 +96,7 @@
     <div class="space-y-4">
       <div class="flex flex-wrap items-center justify-between gap-4">
         <div>
-          <h1 class="flex items-center gap-3 text-2xl font-bold @md:text-3xl">
-            <Layers class="h-6 w-6 text-amber-600 @md:h-8 @md:w-8" />
+          <h1 class="text-2xl font-bold @md:text-3xl">
             Basal Rate Analysis
           </h1>
           <p class="mt-1 text-muted-foreground">
@@ -125,6 +124,7 @@
           </Button>
         </div>
       </div>
+
 
       <!-- Period info -->
       <div
