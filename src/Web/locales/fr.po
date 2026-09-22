@@ -10,7 +10,7 @@ msgstr ""
 #. 0: page.status
 #: src/routes/+error.svelte
 msgid "{0} Error"
-msgstr ""
+msgstr "test"
 
 #: src/routes/+error.svelte
 msgid "An error occurred while processing your request."
