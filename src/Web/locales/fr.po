@@ -88,7 +88,7 @@ msgstr ""
 #: src/lib/components/dashboard/widgets/ConnectionStatusWidget.svelte
 #: src/routes/(authenticated)/settings/migration/+page.svelte
 msgid "Connection failed"
-msgstr ""
+msgstr "Échec de la connexion"
 
 #: src/lib/components/WebSocketStatus.svelte
 #: src/lib/components/dashboard/widgets/ConnectionStatusWidget.svelte
@@ -10098,7 +10098,7 @@ msgstr ""
 #: src/routes/(unauthenticated)/auth/login/+page.svelte
 #: src/routes/(unauthenticated)/setup/StepSidebar.svelte
 msgid "Welcome to Nocturne"
-msgstr ""
+msgstr "Bienvenue sur Nocturne"
 
 #: src/routes/(unauthenticated)/setup/StepSidebar.svelte
 msgid "Migrating from Nightscout"
