@@ -1,0 +1,1 @@
+Screenshots attached to support issues.
